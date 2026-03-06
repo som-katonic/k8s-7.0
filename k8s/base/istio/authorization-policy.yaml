@@ -1,0 +1,76 @@
+# ── Istio AuthorizationPolicy: Require valid JWT for all service traffic ──
+# Health/metrics/docs endpoints are public.
+# Frontend and Keycloak have their own allow-all policies below.
+# Everything else requires a valid JWT (requestPrincipals: ["*"]).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: require-jwt
+  namespace: katonic
+spec:
+  action: ALLOW
+  rules:
+    # ── Public endpoints (health, metrics, docs) ──
+    - to:
+        - operation:
+            paths:
+              - "/health*"
+              - "/ready*"
+              - "/metrics*"
+              - "/docs*"
+              - "/openapi.json"
+              - "/redoc"
+              - "/healthz"
+              - "/v1/health/*"
+    # ── Everything else requires valid JWT ──
+    - from:
+        - source:
+            requestPrincipals: ["*"]
+---
+# ── Allow all traffic to Frontend (static SPA, no auth needed) ──
+# The frontend serves HTML/JS/CSS — Keycloak JS handles login redirect.
+# API calls are proxied to backend services which enforce their own auth.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-frontend
+  namespace: katonic
+spec:
+  selector:
+    matchLabels:
+      app: katonic-frontend
+  action: ALLOW
+  rules:
+    - {}
+---
+# ── Allow all traffic to Keycloak (handles its own auth) ──
+# Keycloak must be reachable for login, token exchange, JWKS fetch, etc.
+# Browser requests arrive with Host: preview.katonic.ai via nginx proxy.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-keycloak
+  namespace: katonic
+spec:
+  selector:
+    matchLabels:
+      app: keycloak
+  action: ALLOW
+  rules:
+    - {}
+---
+# ── Allow all traffic to platform-backend (Node.js BFF) ──
+# The BFF receives proxied requests from nginx and forwards JWT to backends.
+# It handles its own auth validation before proxying.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-platform-backend
+  namespace: katonic
+spec:
+  selector:
+    matchLabels:
+      app: platform-backend
+  action: ALLOW
+  rules:
+    - {}

@@ -1,0 +1,331 @@
+# ── Keycloak Realm Seed Job ──
+# Creates the 'platform' realm, clients, roles, mappers, and admin user.
+# Runs once after Keycloak is healthy. Idempotent — safe to re-run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-keycloak
+  namespace: katonic
+  labels:
+    app: seed-keycloak
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: seed-keycloak
+        sidecar.istio.io/inject: "false"
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        # Wait for Keycloak to be healthy before seeding
+        - name: wait-for-keycloak
+          image: curlimages/curl:8.5.0
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Keycloak to be ready..."
+              until curl -sf http://keycloak:9000/auth/health/ready; do
+                echo "  Keycloak not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "Keycloak is ready!"
+      containers:
+        - name: seed
+          image: python:3.12-slim
+          command:
+            - sh
+            - -c
+            - |
+              pip install -q python-keycloak>=4.0.0 && python /scripts/seed_keycloak.py
+          env:
+            - name: KEYCLOAK_URL
+              value: "http://keycloak:8080/auth"
+            - name: KEYCLOAK_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: KEYCLOAK_ADMIN_USER
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: KEYCLOAK_CLIENT_SECRET
+            - name: ADMIN_USER_PASSWORD
+              value: "admin123"
+          volumeMounts:
+            - name: seed-script
+              mountPath: /scripts
+      volumes:
+        - name: seed-script
+          configMap:
+            name: seed-keycloak-script
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seed-keycloak-script
+  namespace: katonic
+data:
+  seed_keycloak.py: |
+    """
+    Keycloak realm seed script.
+    Creates the 'platform' realm with clients, roles, protocol mappers,
+    and a default admin user. Idempotent — safe to re-run.
+    """
+    import os
+    import sys
+    from keycloak import KeycloakAdmin, KeycloakOpenIDConnection
+
+    KC_URL = os.environ["KEYCLOAK_URL"]
+    KC_ADMIN = os.environ["KEYCLOAK_ADMIN_USER"]
+    KC_PASS = os.environ["KEYCLOAK_ADMIN_PASSWORD"]
+    CLIENT_SECRET = os.environ["KEYCLOAK_CLIENT_SECRET"]
+    ADMIN_USER_PASS = os.environ.get("ADMIN_USER_PASSWORD", "changeme")
+
+    REALM = "platform"
+    PUBLIC_CLIENT = "platform-ui"
+    CONFIDENTIAL_CLIENT = "platform-api"
+    ROLES = ["platform_admin", "team_admin", "developer", "viewer"]
+    REDIRECT_URIS = [
+        "https://preview.katonic.ai/*",
+        "http://localhost:3000/*",
+        "http://localhost:5173/*",
+    ]
+    WEB_ORIGINS = [
+        "https://preview.katonic.ai",
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ]
+
+    def main():
+        print(f"Connecting to Keycloak at {KC_URL}...")
+        conn = KeycloakOpenIDConnection(
+            server_url=KC_URL,
+            username=KC_ADMIN,
+            password=KC_PASS,
+            realm_name="master",
+            verify=False,
+        )
+        admin = KeycloakAdmin(connection=conn)
+
+        # ── Create realm ──
+        existing = [r["realm"] for r in admin.get_realms()]
+        if REALM not in existing:
+            print(f"Creating realm '{REALM}'...")
+            admin.create_realm(
+                payload={
+                    "realm": REALM,
+                    "enabled": True,
+                    "displayName": "Katonic Platform",
+                    "accessTokenLifespan": 300,       # 5 min
+                    "ssoSessionIdleTimeout": 1800,     # 30 min
+                    "ssoSessionMaxLifespan": 36000,    # 10 hours
+                    "accessTokenLifespanForImplicitFlow": 300,
+                    "offlineSessionIdleTimeout": 2592000,  # 30 days
+                    "registrationAllowed": False,
+                    "resetPasswordAllowed": True,
+                    "loginWithEmailAllowed": True,
+                    "duplicateEmailsAllowed": False,
+                },
+                skip_exists=True,
+            )
+        else:
+            print(f"Realm '{REALM}' already exists.")
+
+        # Switch to platform realm
+        admin.change_current_realm(REALM)
+
+        # ── Create realm roles ──
+        for role in ROLES:
+            try:
+                admin.create_realm_role(
+                    payload={"name": role, "description": f"Platform role: {role}"},
+                    skip_exists=True,
+                )
+                print(f"  Role '{role}' ready.")
+            except Exception as e:
+                if "already exists" in str(e).lower() or "409" in str(e):
+                    print(f"  Role '{role}' already exists.")
+                else:
+                    raise
+
+        # ── Create public client (platform-ui) ──
+        try:
+            admin.create_client(
+                payload={
+                    "clientId": PUBLIC_CLIENT,
+                    "name": "Katonic Platform UI",
+                    "enabled": True,
+                    "publicClient": True,
+                    "standardFlowEnabled": True,
+                    "directAccessGrantsEnabled": False,
+                    "implicitFlowEnabled": False,
+                    "redirectUris": REDIRECT_URIS,
+                    "webOrigins": WEB_ORIGINS,
+                    "attributes": {
+                        "pkce.code.challenge.method": "S256",
+                        "post.logout.redirect.uris": "+",
+                    },
+                    "protocol": "openid-connect",
+                    "fullScopeAllowed": True,
+                },
+                skip_exists=True,
+            )
+            print(f"  Client '{PUBLIC_CLIENT}' ready.")
+        except Exception as e:
+            if "already exists" in str(e).lower() or "409" in str(e):
+                print(f"  Client '{PUBLIC_CLIENT}' already exists.")
+            else:
+                raise
+
+        # ── Create confidential client (platform-api) ──
+        try:
+            admin.create_client(
+                payload={
+                    "clientId": CONFIDENTIAL_CLIENT,
+                    "name": "Katonic Platform API",
+                    "enabled": True,
+                    "publicClient": False,
+                    "standardFlowEnabled": False,
+                    "serviceAccountsEnabled": True,
+                    "directAccessGrantsEnabled": False,
+                    "secret": CLIENT_SECRET,
+                    "protocol": "openid-connect",
+                    "fullScopeAllowed": True,
+                },
+                skip_exists=True,
+            )
+            print(f"  Client '{CONFIDENTIAL_CLIENT}' ready.")
+        except Exception as e:
+            if "already exists" in str(e).lower() or "409" in str(e):
+                print(f"  Client '{CONFIDENTIAL_CLIENT}' already exists.")
+            else:
+                raise
+
+        # ── Add protocol mappers for custom claims ──
+        ui_client_id = admin.get_client_id(PUBLIC_CLIENT)
+        mappers = [
+            {
+                "name": "tenant_id",
+                "protocol": "openid-connect",
+                "protocolMapper": "oidc-usermodel-attribute-mapper",
+                "config": {
+                    "user.attribute": "tenant_id",
+                    "claim.name": "tenant_id",
+                    "jsonType.label": "String",
+                    "id.token.claim": "true",
+                    "access.token.claim": "true",
+                    "userinfo.token.claim": "true",
+                    "multivalued": "false",
+                },
+            },
+            {
+                "name": "teams",
+                "protocol": "openid-connect",
+                "protocolMapper": "oidc-usermodel-attribute-mapper",
+                "config": {
+                    "user.attribute": "teams",
+                    "claim.name": "teams",
+                    "jsonType.label": "String",
+                    "id.token.claim": "true",
+                    "access.token.claim": "true",
+                    "userinfo.token.claim": "true",
+                    "multivalued": "true",
+                    "aggregate.attrs": "true",
+                },
+            },
+            {
+                "name": "department",
+                "protocol": "openid-connect",
+                "protocolMapper": "oidc-usermodel-attribute-mapper",
+                "config": {
+                    "user.attribute": "department",
+                    "claim.name": "department",
+                    "jsonType.label": "String",
+                    "id.token.claim": "true",
+                    "access.token.claim": "true",
+                    "userinfo.token.claim": "true",
+                    "multivalued": "false",
+                },
+            },
+        ]
+        for mapper in mappers:
+            try:
+                admin.add_mapper_to_client(ui_client_id, mapper)
+                print(f"  Mapper '{mapper['name']}' added to {PUBLIC_CLIENT}.")
+            except Exception as e:
+                if "already exists" in str(e).lower() or "409" in str(e):
+                    print(f"  Mapper '{mapper['name']}' already exists.")
+                else:
+                    raise
+
+        # Also add mappers to the confidential client
+        api_client_id = admin.get_client_id(CONFIDENTIAL_CLIENT)
+        for mapper in mappers:
+            try:
+                admin.add_mapper_to_client(api_client_id, mapper)
+            except Exception:
+                pass  # OK if already exists
+
+        # ── Create default admin user ──
+        try:
+            admin.create_user(
+                payload={
+                    "username": "admin@katonic.ai",
+                    "email": "admin@katonic.ai",
+                    "firstName": "Platform",
+                    "lastName": "Admin",
+                    "enabled": True,
+                    "emailVerified": True,
+                    "credentials": [
+                        {
+                            "type": "password",
+                            "value": ADMIN_USER_PASS,
+                            "temporary": False,
+                        }
+                    ],
+                    "attributes": {
+                        "tenant_id": ["default"],
+                        "teams": ["engineering", "platform"],
+                        "department": ["Engineering"],
+                    },
+                },
+                exist_ok=True,
+            )
+            print("  Admin user 'admin@katonic.ai' ready.")
+        except Exception as e:
+            if "already exists" in str(e).lower() or "409" in str(e):
+                print("  Admin user already exists.")
+            else:
+                raise
+
+        # Assign platform_admin role to admin user
+        user_id = admin.get_user_id("admin@katonic.ai")
+        role = admin.get_realm_role("platform_admin")
+        try:
+            admin.assign_realm_roles(user_id=user_id, roles=[role])
+            print("  Assigned 'platform_admin' role to admin user.")
+        except Exception:
+            print("  Role already assigned or assignment skipped.")
+
+        print("\n=== Keycloak seed complete ===")
+        print(f"  Realm: {REALM}")
+        print(f"  Public client: {PUBLIC_CLIENT} (PKCE S256)")
+        print(f"  Confidential client: {CONFIDENTIAL_CLIENT}")
+        print(f"  Roles: {', '.join(ROLES)}")
+        print(f"  Admin: admin@katonic.ai")
+
+    if __name__ == "__main__":
+        try:
+            main()
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)

@@ -1,0 +1,108 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate-add-starred-chats
+  namespace: katonic
+  labels:
+    app: migrate-add-starred-chats
+    app.kubernetes.io/component: migration
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: migrate-add-starred-chats
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+
+      # ── Wait for PostgreSQL to be ready before running migration ──
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL at ${PG_HOST}:${PG_PORT}..."
+              until pg_isready -h "$PG_HOST" -p "$PG_PORT" -U "$POSTGRES_USER"; do
+                echo "  PostgreSQL not ready — retrying in 3s"
+                sleep 3
+              done
+              echo "PostgreSQL is ready!"
+          env:
+            - name: PG_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_HOST
+            - name: PG_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_PORT
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_USER
+
+      # ── Run the migration SQL ──
+      containers:
+        - name: migrate
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "=== Running migration: add is_starred to assistant_chat_sessions ==="
+
+              psql "postgresql://${PG_USER}:${PG_PASS}@${PG_HOST}:${PG_PORT}/${PG_DB}" <<'SQL'
+              -- Migration: Add is_starred column to assistant_chat_sessions
+              -- Supports the star/pin chat feature in the ACE sidebar.
+
+              ALTER TABLE assistant_chat_sessions
+                ADD COLUMN IF NOT EXISTS is_starred BOOLEAN NOT NULL DEFAULT FALSE;
+
+              -- Index for efficient "starred first" ordering in session listing
+              CREATE INDEX IF NOT EXISTS idx_chat_sessions_starred
+                ON assistant_chat_sessions (assistant_chat_id, is_starred DESC, create_time DESC);
+              SQL
+
+              echo "=== Migration completed successfully ==="
+          env:
+            - name: PG_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_HOST
+            - name: PG_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_PORT
+            - name: PG_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_DB
+            - name: PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_USER
+            - name: PG_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

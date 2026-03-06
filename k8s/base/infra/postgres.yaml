@@ -1,0 +1,131 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: katonic
+data:
+  init-db.sql: |
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+    CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+    REVOKE ALL ON DATABASE platform FROM PUBLIC;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_admin') THEN
+        CREATE ROLE svc_admin LOGIN PASSWORD 'change_me_admin';
+      END IF;
+    END $$;
+    GRANT CONNECT ON DATABASE platform TO svc_admin;
+    GRANT USAGE ON SCHEMA public TO svc_admin;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO svc_admin;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_observability') THEN
+        CREATE ROLE svc_observability LOGIN PASSWORD 'change_me_obs';
+      END IF;
+    END $$;
+    GRANT CONNECT ON DATABASE platform TO svc_observability;
+    GRANT USAGE ON SCHEMA public TO svc_observability;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO svc_observability;
+    GRANT USAGE ON SCHEMA public TO platform;
+    CREATE DATABASE keycloak OWNER platform;
+    REVOKE ALL ON DATABASE keycloak FROM PUBLIC;
+    CREATE DATABASE knowledge_engine OWNER platform;
+    REVOKE ALL ON DATABASE knowledge_engine FROM PUBLIC;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_knowledge') THEN
+        CREATE ROLE svc_knowledge LOGIN PASSWORD 'change_me_ke';
+      END IF;
+    END $$;
+    GRANT CONNECT ON DATABASE knowledge_engine TO svc_knowledge;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: katonic
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: tcp-postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: katonic
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              value: "platform"
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "platform", "-d", "platform"]
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "platform", "-d", "platform"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "platform", "-d", "platform"]
+            periodSeconds: 10
+            failureThreshold: 5
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
