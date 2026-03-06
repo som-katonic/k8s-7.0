@@ -1,0 +1,169 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.workspaceService.name }}-sa
+  namespace: {{ .Values.global.namespace }}
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.workspaceService.name }}-role
+  namespace: {{ .Values.global.namespace }}
+rules:
+  - apiGroups: ["", "apps"]
+    resources: ["pods", "services", "deployments", "persistentvolumeclaims", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.workspaceService.name }}-rb
+  namespace: {{ .Values.global.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.workspaceService.name }}-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.workspaceService.name }}-sa
+    namespace: {{ .Values.global.namespace }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.workspaceService.name }}
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    app: {{ .Values.workspaceService.name }}
+  ports:
+    - name: http-api
+      port: {{ .Values.workspaceService.service.port }}
+      targetPort: {{ .Values.workspaceService.service.targetPort }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.workspaceService.name }}
+  namespace: {{ .Values.global.namespace }}
+spec:
+  replicas: {{ .Values.workspaceService.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.workspaceService.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.workspaceService.name }}
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: {{ .Values.workspaceService.name }}-sa
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      containers:
+        - name: {{ .Values.workspaceService.name }}
+          image: "{{ .Values.workspaceService.image.repository }}:{{ .Values.workspaceService.image.tag }}"
+          imagePullPolicy: {{ .Values.workspaceService.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.workspaceService.service.targetPort }}
+
+          env:
+            - name: WS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secret }}
+                  key: POSTGRES_URL
+            - name: WS_K8S_IN_CLUSTER
+              value: "true"
+            - name: WS_K8S_NAMESPACE
+              value: {{ .Values.global.namespace }}
+            - name: WS_ORG_NAME
+              value: "{{ .Values.workspaceService.env.orgName }}"
+            - name: WS_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secret }}
+                  key: JWT_SECRET
+            - name: WS_NFS_STORAGE_CLASS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: NFS_STORAGE_CLASS
+            - name: WS_NFS_DEFAULT_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: NFS_DEFAULT_SIZE
+            - name: WS_MODEL_CACHE_PVC
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: MODEL_CACHE_PVC
+            - name: PLATFORM_ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: PLATFORM_ENVIRONMENT
+            # -- Keycloak --
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secret }}
+                  key: KEYCLOAK_CLIENT_SECRET
+            - name: KEYCLOAK_SERVER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: KEYCLOAK_SERVER_URL
+            - name: KEYCLOAK_REALM
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: KEYCLOAK_REALM
+            - name: KEYCLOAK_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: KEYCLOAK_AUDIENCE
+            - name: KEYCLOAK_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: KEYCLOAK_ISSUER
+
+          resources:
+            requests:
+              cpu: {{ .Values.workspaceService.resources.requests.cpu }}
+              memory: {{ .Values.workspaceService.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.workspaceService.resources.limits.cpu }}
+              memory: {{ .Values.workspaceService.resources.limits.memory }}
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.workspaceService.service.targetPort }}
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.workspaceService.service.targetPort }}
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.workspaceService.service.targetPort }}
+            periodSeconds: 15
+            failureThreshold: 5

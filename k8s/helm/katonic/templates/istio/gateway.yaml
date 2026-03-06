@@ -1,0 +1,43 @@
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.gateway.name }}
+  namespace: {{ .Values.gateway.namespace }}
+spec:
+  selector:
+    istio: {{ .Values.gateway.selector }}
+  servers:
+    {{- range .Values.gateway.servers }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . }}
+        {{- end }}
+      port:
+        name: {{ .port.name }}
+        number: {{ .port.number }}
+        protocol: {{ .port.protocol }}
+      {{- if .tls }}
+      tls:
+        {{- if .tls.cipherSuites }}
+        cipherSuites:
+          {{- range .tls.cipherSuites }}
+          - {{ . }}
+          {{- end }}
+        {{- end }}
+        {{- if .tls.credentialName }}
+        credentialName: {{ .tls.credentialName }}
+        {{- end }}
+        {{- if .tls.maxProtocolVersion }}
+        maxProtocolVersion: {{ .tls.maxProtocolVersion }}
+        {{- end }}
+        {{- if .tls.minProtocolVersion }}
+        minProtocolVersion: {{ .tls.minProtocolVersion }}
+        {{- end }}
+        {{- if .tls.mode }}
+        mode: {{ .tls.mode }}
+        {{- end }}
+        {{- if .tls.httpsRedirect }}
+        httpsRedirect: {{ .tls.httpsRedirect }}
+        {{- end }}
+      {{- end }}
+    {{- end }}

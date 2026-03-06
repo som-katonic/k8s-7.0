@@ -1,0 +1,131 @@
+{{- $fullName := .Release.Name | printf "%s-keycloak" -}}
+{{- $namespace := .Values.namespace -}}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ $namespace }}
+  labels:
+    app: keycloak
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+        sidecar.istio.io/inject: "{{ .Values.sidecar.istioInject }}"
+    spec:
+      containers:
+        - name: keycloak
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - start
+            - --db=postgres
+            - --db-url-host=$(POSTGRES_HOST)
+            - --db-url-port=$(POSTGRES_PORT)
+            - --db-url-database={{ .Values.keycloak.dbName }}
+            - --db-username=$(POSTGRES_USER)
+            - --db-password=$(POSTGRES_PASSWORD)
+            - --hostname={{ .Values.keycloak.hostname }}
+            - --hostname-strict={{ .Values.keycloak.hostnameStrict }}
+            - --http-enabled={{ .Values.keycloak.httpEnabled }}
+            - --http-relative-path={{ .Values.keycloak.httpRelativePath }}
+            - --proxy-headers={{ .Values.keycloak.proxyHeaders }}
+            - --health-enabled={{ .Values.keycloak.healthEnabled }}
+            - --metrics-enabled={{ .Values.keycloak.metricsEnabled }}
+          env:
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.configMapName }}
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.configMapName }}
+                  key: POSTGRES_PORT
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: POSTGRES_PASSWORD
+            - name: KC_DB_SCHEMA
+              value: {{ .Values.keycloak.dbSchema }}
+            - name: KEYCLOAK_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: KEYCLOAK_ADMIN_USER
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: KEYCLOAK_ADMIN_PASSWORD
+          ports:
+            - name: http
+              containerPort: {{ .Values.ports.http }}
+              protocol: TCP
+            - name: management
+              containerPort: {{ .Values.ports.management }}
+              protocol: TCP
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}
+          livenessProbe:
+            httpGet:
+              path: /auth/health/live
+              port: {{ .Values.ports.management }}
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /auth/health/ready
+              port: {{ .Values.ports.management }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /auth/health/started
+              port: {{ .Values.ports.management }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ $namespace }}
+  labels:
+    app: keycloak
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: {{ .Values.ports.http }}
+      targetPort: {{ .Values.ports.http }}
+      protocol: TCP
+    - name: management
+      port: {{ .Values.ports.management }}
+      targetPort: {{ .Values.ports.management }}
+      protocol: TCP
+  type: {{ .Values.service.type }}

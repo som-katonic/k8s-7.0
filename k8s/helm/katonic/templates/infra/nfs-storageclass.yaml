@@ -1,0 +1,17 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storageClass.name }}
+  labels:
+    app.kubernetes.io/part-of: {{ .Values.labels.partOf }}
+provisioner: {{ .Values.storageClass.provisioner }}
+parameters:
+  protocol: {{ .Values.storageClass.parameters.protocol }}
+  skuName: {{ .Values.storageClass.parameters.skuName }}
+reclaimPolicy: {{ .Values.storageClass.reclaimPolicy }}
+volumeBindingMode: {{ .Values.storageClass.volumeBindingMode }}
+allowVolumeExpansion: {{ .Values.storageClass.allowVolumeExpansion }}
+mountOptions:
+{{- range .Values.storageClass.mountOptions }}
+  - {{ . }}
+{{- end }}

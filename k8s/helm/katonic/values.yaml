@@ -1,0 +1,916 @@
+# =============================================================================
+# Katonic Platform — Unified Helm Values
+# =============================================================================
+
+namespace: katonic
+
+# -----------------------------------------------------------------------------
+# Global
+# -----------------------------------------------------------------------------
+global:
+  imagePullPolicy: IfNotPresent
+  imagePullSecret: dockerhub-secret
+  configMap: platform-config
+  secret: platform-secret
+
+# -----------------------------------------------------------------------------
+# Backend Services
+# -----------------------------------------------------------------------------
+adminApi:
+  name: admin-api
+  replicas: 1
+  containerPort: 8000
+  image:
+    repository: katonic/admin-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8000
+    targetPort: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+agentApi:
+  name: agent-api
+  replicas: 1
+  containerPort: 8000
+  image:
+    repository: katonic/agent-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8000
+    targetPort: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+agentRuntime:
+  name: agent-runtime
+  replicas: 1
+  containerPort: 8000
+  image:
+    repository: katonic/agent-runtime
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 8000
+    targetPort: 8000
+  redisUrl: redis://redis:6379
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+aiGateway:
+  name: ai-gateway
+  replicas: 1
+  containerPort: 8010
+  image:
+    repository: katonic/ai-gateway
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8010
+    targetPort: 8010
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+evalEngine:
+  name: eval-engine
+  replicas: 1
+  containerPort: 8015
+  image:
+    repository: katonic/eval-engine
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 8015
+    targetPort: 8015
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+governanceProxy:
+  name: governance-proxy
+  replicas: 1
+  containerPort: 8000
+  image:
+    repository: katonic/governance-proxy
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8000
+    targetPort: 8000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+guardrailsEngine:
+  name: guardrails-engine
+  replicas: 1
+  containerPort: 8000
+  image:
+    repository: katonic/guardrails-engine
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8000
+    targetPort: 8000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+knowledgeEngine:
+  name: knowledge-engine
+  replicas: 1
+  containerPort: 8011
+  image:
+    repository: katonic/knowledge-engine
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8011
+    targetPort: 8011
+  milvus:
+    host: "milvus"
+    port: "19530"
+  minio:
+    endpoint: "minio:9000"
+  debug: "true"
+  permissions:
+    failClosed: "false"
+  auth:
+    enabled: "true"
+    jwksUrl: "http://keycloak:8080/auth/realms/platform/protocol/openid-connect/certs"
+    issuer: "https://preview.katonic.ai/auth/realms/platform"
+    audience: "platform-api"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
+mcpGateway:
+  name: mcp-gateway
+  replicas: 1
+  containerPort: 8009
+  timeout: 15
+  image:
+    repository: katonic/mcp-gateway
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8009
+    targetPort: 8009
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+modelDeploymentService:
+  name: model-deployment-service
+  replicas: 1
+  containerPort: 8012
+  image:
+    repository: katonic/model-deployment-service
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8012
+    targetPort: 8012
+  serviceAccount:
+    name: model-deployment-sa
+  role:
+    name: model-deployment-role
+  roleBinding:
+    name: model-deployment-rb
+  env:
+    k8sInCluster: "true"
+    vllmImage: "vllm/vllm-openai:latest"
+    tgiImage: "ghcr.io/huggingface/text-generation-inference:latest"
+    nimImagePrefix: "nvcr.io/nim"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+observability:
+  name: observability
+  replicas: 1
+  image:
+    repository: katonic/observability
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    apiPort: 8000
+    apiTargetPort: 8000
+    metricsPort: 9090
+    metricsTargetPort: 9090
+  env:
+    langfuseEnabled: "false"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+platformBackend:
+  name: platform-backend
+  replicas: 1
+  image:
+    repository: katonic/platform-backend
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 3002
+    targetPort: 3002
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+remoteConnections:
+  name: remote-connections
+  replicas: 1
+  image:
+    repository: katonic/remote-connections
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8014
+    targetPort: 8014
+  env:
+    debug: "false"
+    jwtAlgorithm: "HS256"
+    defaultToolTimeout: "30.0"
+    specFetchTimeout: "15.0"
+    healthCheckTimeout: "10.0"
+    mcpSseTimeout: "60.0"
+    mcpSseReconnectDelay: "5.0"
+    healthCheckInterval: "300"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+workspaceService:
+  name: workspace-service
+  replicas: 1
+  image:
+    repository: katonic/workspace-service
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8013
+    targetPort: 8013
+  env:
+    orgName: "katonic"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# -----------------------------------------------------------------------------
+# Frontend
+# -----------------------------------------------------------------------------
+frontend:
+  name: katonic-frontend
+  replicas: 1
+  image:
+    repository: katonic/katonic-frontend
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 3000
+    targetPort: 3000
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  startupProbe:
+    failureThreshold: 15
+    periodSeconds: 10
+    timeoutSeconds: 3
+  readinessProbe:
+    periodSeconds: 10
+    timeoutSeconds: 3
+  livenessProbe:
+    periodSeconds: 15
+    timeoutSeconds: 3
+    failureThreshold: 5
+
+# -----------------------------------------------------------------------------
+# Infrastructure
+# -----------------------------------------------------------------------------
+infra:
+
+  postgres:
+    service:
+      name: postgres
+      selector: postgres
+      port: 5432
+      targetPort: 5432
+    statefulSet:
+      name: postgres
+      serviceName: postgres
+      replicas: 1
+      selector: postgres
+      sidecarInject: "false"
+      container:
+        image: postgres:16-alpine
+        port: 5432
+        db: platform
+        dbUser: platform
+        pgdata: /var/lib/postgresql/data/pgdata
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi
+      volume:
+        storage: 5Gi
+    secrets:
+      user:
+        name: platform-secret
+        key: POSTGRES_USER
+      password:
+        name: platform-secret
+        key: POSTGRES_PASSWORD
+    probes:
+      startup:
+        failureThreshold: 30
+        periodSeconds: 10
+        timeoutSeconds: 3
+      readiness:
+        periodSeconds: 5
+      liveness:
+        periodSeconds: 10
+        failureThreshold: 5
+    configMap:
+      name: postgres-init
+      initSQL: |
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+        CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+        CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+        REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+        REVOKE ALL ON DATABASE platform FROM PUBLIC;
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_admin') THEN
+            CREATE ROLE svc_admin LOGIN PASSWORD 'change_me_admin';
+          END IF;
+        END $$;
+        GRANT CONNECT ON DATABASE platform TO svc_admin;
+        GRANT USAGE ON SCHEMA public TO svc_admin;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO svc_admin;
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_observability') THEN
+            CREATE ROLE svc_observability LOGIN PASSWORD 'change_me_obs';
+          END IF;
+        END $$;
+        GRANT CONNECT ON DATABASE platform TO svc_observability;
+        GRANT USAGE ON SCHEMA public TO svc_observability;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO svc_observability;
+        GRANT USAGE ON SCHEMA public TO platform;
+        CREATE DATABASE keycloak OWNER platform;
+        REVOKE ALL ON DATABASE keycloak FROM PUBLIC;
+        CREATE DATABASE knowledge_engine OWNER platform;
+        REVOKE ALL ON DATABASE knowledge_engine FROM PUBLIC;
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_knowledge') THEN
+            CREATE ROLE svc_knowledge LOGIN PASSWORD 'change_me_ke';
+          END IF;
+        END $$;
+        GRANT CONNECT ON DATABASE knowledge_engine TO svc_knowledge;
+
+  redis:
+    service:
+      name: redis
+      selector: redis
+      port: 6379
+      targetPort: 6379
+    statefulSet:
+      name: redis
+      serviceName: redis
+      replicas: 1
+      selector: redis
+      sidecarInject: "false"
+      container:
+        image: redis:7-alpine
+        port: 6379
+        maxMemory: 512mb
+        maxMemoryPolicy: allkeys-lru
+        appendOnly: yes
+        mountPath: /data
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 250m
+          memory: 512Mi
+      volume:
+        storage: 2Gi
+    probes:
+      startup:
+        failureThreshold: 15
+        periodSeconds: 10
+        timeoutSeconds: 3
+      readiness:
+        periodSeconds: 5
+      liveness:
+        periodSeconds: 10
+        failureThreshold: 5
+
+  clickhouse:
+    image:
+      repository: clickhouse/clickhouse-server
+      tag: "24.3"
+      pullPolicy: IfNotPresent
+    service:
+      ports:
+        http: 8123
+        native: 9000
+    statefulset:
+      replicas: 1
+    clickhouse:
+      db: platform
+      user: default
+    secrets:
+      clickhouse: clickhouse-creds
+    resources:
+      requests:
+        cpu: 100m
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 4Gi
+    storage:
+      size: 10Gi
+    initSQL: |
+      CREATE DATABASE IF NOT EXISTS platform;
+      CREATE USER IF NOT EXISTS platform_svc IDENTIFIED BY 'change_me_clickhouse';
+      GRANT SELECT, INSERT ON platform.* TO platform_svc;
+      CREATE USER IF NOT EXISTS platform_reader IDENTIFIED BY 'change_me_reader';
+      GRANT SELECT ON platform.* TO platform_reader;
+      USE platform;
+      CREATE TABLE IF NOT EXISTS llm_usage_events (...);
+      CREATE TABLE IF NOT EXISTS tool_usage_events (...);
+      CREATE TABLE IF NOT EXISTS admin_action_events (...);
+      CREATE TABLE IF NOT EXISTS policy_decision_events (...);
+      CREATE TABLE IF NOT EXISTS guardrail_events (...);
+      CREATE TABLE IF NOT EXISTS governance_tool_events (...);
+      CREATE MATERIALIZED VIEW IF NOT EXISTS mv_llm_hourly_stats AS SELECT ...;
+      CREATE MATERIALIZED VIEW IF NOT EXISTS mv_tool_hourly_stats AS SELECT ...;
+
+  keycloak:
+    replicaCount: 1
+    sidecar:
+      istioInject: "true"
+    image:
+      repository: quay.io/keycloak/keycloak
+      tag: "26.0"
+      pullPolicy: IfNotPresent
+    ports:
+      http: 8080
+      management: 9000
+    service:
+      type: ClusterIP
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    configMapName: platform-config
+    secretName: platform-secret
+    keycloak:
+      dbName: keycloak
+      dbSchema: public
+      hostname: "https://preview.katonic.ai/auth"
+      hostnameStrict: "false"
+      httpEnabled: "true"
+      httpRelativePath: "/auth"
+      proxyHeaders: "xforwarded"
+      healthEnabled: "true"
+      metricsEnabled: "true"
+
+  modelCache:
+    pvc:
+      name: model-cache
+      accessMode: ReadWriteMany
+      storageClassName: azurefile-nfs
+      storage: 50Gi
+    labels:
+      partOf: katonic-platform
+      component: model-cache
+    storageClass:
+      name: azurefile-nfs
+      provisioner: file.csi.azure.com
+      parameters:
+        protocol: nfs
+        skuName: Premium_LRS
+      reclaimPolicy: Retain
+      volumeBindingMode: Immediate
+      allowVolumeExpansion: true
+      mountOptions:
+        - nconnect=4
+        - hard
+        - noresvport
+
+# -----------------------------------------------------------------------------
+# Istio
+# -----------------------------------------------------------------------------
+istio:
+
+  authorizationPolicy:
+    jwtPublicPaths:
+      - "/health*"
+      - "/ready*"
+      - "/metrics*"
+      - "/docs*"
+      - "/openapi.json"
+      - "/redoc"
+      - "/healthz"
+      - "/v1/health/*"
+    allowAllApps:
+      - name: frontend
+        app: katonic-frontend
+      - name: keycloak
+        app: keycloak
+      - name: platform-backend
+        app: platform-backend
+
+  destinationRules:
+    - name: admin-api
+      host: admin-api
+      tlsMode: ISTIO_MUTUAL
+      connectionPool:
+        http:
+          maxRequestsPerConnection: 100
+        tcp:
+          maxConnections: 100
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: 30s
+        baseEjectionTime: 30s
+        maxEjectionPercent: 50
+
+    - name: agent-api
+      host: agent-api
+      tlsMode: ISTIO_MUTUAL
+      connectionPool:
+        http:
+          maxRequestsPerConnection: 100
+        tcp:
+          maxConnections: 100
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: 30s
+        baseEjectionTime: 30s
+        maxEjectionPercent: 50
+
+    - name: governance-proxy
+      host: governance-proxy
+      tlsMode: ISTIO_MUTUAL
+      connectionPool:
+        http:
+          maxRequestsPerConnection: 50
+          idleTimeout: 120s
+        tcp:
+          maxConnections: 100
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: 30s
+        baseEjectionTime: 60s
+        maxEjectionPercent: 50
+
+    - name: guardrails-engine
+      host: guardrails-engine
+      tlsMode: ISTIO_MUTUAL
+      connectionPool:
+        http:
+          maxRequestsPerConnection: 50
+          idleTimeout: 120s
+        tcp:
+          maxConnections: 100
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: 30s
+        baseEjectionTime: 60s
+        maxEjectionPercent: 50
+
+    - name: knowledge-engine
+      host: knowledge-engine
+      tlsMode: ISTIO_MUTUAL
+      connectionPool:
+        http:
+          maxRequestsPerConnection: 50
+        tcp:
+          maxConnections: 100
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: 30s
+        baseEjectionTime: 30s
+        maxEjectionPercent: 50
+
+    - name: ai-gateway
+      host: ai-gateway
+      tlsMode: ISTIO_MUTUAL
+      connectionPool:
+        http:
+          maxRequestsPerConnection: 50
+          idleTimeout: 300s
+        tcp:
+          maxConnections: 200
+          connectTimeout: 30s
+      outlierDetection:
+        consecutive5xxErrors: 3
+        interval: 60s
+        baseEjectionTime: 60s
+        maxEjectionPercent: 30
+
+    - name: agent-runtime
+      host: agent-runtime
+      tlsMode: ISTIO_MUTUAL
+      connectionPool:
+        http:
+          maxRequestsPerConnection: 50
+          idleTimeout: 300s
+        tcp:
+          maxConnections: 200
+          connectTimeout: 30s
+      outlierDetection:
+        consecutive5xxErrors: 3
+        interval: 60s
+        baseEjectionTime: 60s
+        maxEjectionPercent: 30
+
+    - name: katonic-frontend
+      host: katonic-frontend
+      tlsMode: ISTIO_MUTUAL
+      connectionPool:
+        http:
+          maxRequestsPerConnection: 100
+        tcp:
+          maxConnections: 100
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: 30s
+        baseEjectionTime: 30s
+        maxEjectionPercent: 50
+
+    - name: keycloak
+      host: keycloak
+      tlsMode: ISTIO_MUTUAL
+      connectionPool:
+        http:
+          maxRequestsPerConnection: 100
+        tcp:
+          maxConnections: 100
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: 30s
+        baseEjectionTime: 30s
+        maxEjectionPercent: 50
+
+    - name: postgres
+      host: postgres
+      tlsMode: DISABLE
+
+    - name: redis
+      host: redis
+      tlsMode: DISABLE
+
+    - name: clickhouse
+      host: clickhouse
+      tlsMode: DISABLE
+
+  gateway:
+    name: kt-gateway
+    namespace: istio-system
+    selector: ingressgateway
+    servers:
+      - hosts:
+          - preview.katonic.ai
+        port:
+          name: https
+          number: 443
+          protocol: HTTPS
+        tls:
+          cipherSuites:
+            - ECDHE-ECDSA-AES128-GCM-SHA256
+            - ECDHE-ECDSA-AES256-GCM-SHA384
+            - ECDHE-RSA-AES128-GCM-SHA256
+            - ECDHE-RSA-AES256-GCM-SHA384
+            - ECDHE-RSA-CHACHA20-POLY1305
+          credentialName: kt-certs
+          maxProtocolVersion: TLSV1_3
+          minProtocolVersion: TLSV1_2
+          mode: SIMPLE
+      - hosts:
+          - preview.katonic.ai
+        port:
+          name: http
+          number: 80
+          protocol: HTTP
+        tls:
+          httpsRedirect: true
+
+  peerAuthentication:
+    - name: katonic-default
+      namespace: katonic
+      mtlsMode: PERMISSIVE
+    - name: keycloak-permissive
+      namespace: katonic
+      selector:
+        app: keycloak
+      mtlsMode: PERMISSIVE
+
+  requestAuthentication:
+    name: keycloak-jwt
+    namespace: katonic
+    issuer: "https://preview.katonic.ai/auth/realms/platform"
+    jwksUri: "http://keycloak.katonic.svc.cluster.local:8080/auth/realms/platform/protocol/openid-connect/certs"
+    audiences:
+      - "account"
+      - "platform-api"
+      - "platform-ui"
+    forwardOriginalToken: true
+
+  virtualServices:
+    - name: katonic-ingress
+      namespace: katonic
+      gateways:
+        - istio-system/kt-gateway
+      hosts:
+        - preview.katonic.ai
+      routes:
+        - host: katonic-frontend.katonic.svc.cluster.local
+          port: 3000
+
+    - name: ai-gateway-internal
+      namespace: katonic
+      hosts:
+        - ai-gateway.katonic.svc.cluster.local
+      routes:
+        - host: ai-gateway.katonic.svc.cluster.local
+          port: 8010
+      timeout: 300s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+
+    - name: eval-engine-internal
+      namespace: katonic
+      hosts:
+        - eval-engine.katonic.svc.cluster.local
+      routes:
+        - host: eval-engine.katonic.svc.cluster.local
+          port: 8015
+      timeout: 180s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+
+    - name: agent-runtime-internal
+      namespace: katonic
+      hosts:
+        - agent-runtime.katonic.svc.cluster.local
+      routes:
+        - host: agent-runtime.katonic.svc.cluster.local
+          port: 8000
+      timeout: 300s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+
+# -----------------------------------------------------------------------------
+# Jobs
+# -----------------------------------------------------------------------------
+jobs:
+
+  migrations:
+    backoffLimit: 3
+    ttlSecondsAfterFinished: 600
+    image:
+      postgres: "postgres:16-alpine"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+    postgres:
+      host: postgres
+      port: 5432
+      db: platform
+      user: platform
+      password: change_me
+
+  seedAll:
+    backoffLimit: 3
+    ttlSecondsAfterFinished: 600
+    image:
+      seedAll: katonic/seed-all:latest
+      postgres: postgres:16-alpine
+      pullPolicy: Always
+    imagePullSecrets:
+      - dockerhub-secret
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    postgres:
+      host: postgres
+      port: 5432
+      db: platform
+      user: platform
+      password: change_me
+    platform:
+      db:
+        user: platform
+        password: change_me
+        name: platform
+    milvus:
+      uri: "milvus://localhost:19530"
+    tenantId: "default"
+
+  seedKeycloak:
+    backoffLimit: 5
+    ttlSecondsAfterFinished: 600
+    image:
+      seed: python:3.12-slim
+      waitCurl: curlimages/curl:8.5.0
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    keycloak:
+      url: "http://keycloak:8080/auth"
+      adminUserSecret: KEYCLOAK_ADMIN_USER
+      adminPassSecret: KEYCLOAK_ADMIN_PASSWORD
+      clientSecretSecret: KEYCLOAK_CLIENT_SECRET
+      defaultAdminPass: "admin123"

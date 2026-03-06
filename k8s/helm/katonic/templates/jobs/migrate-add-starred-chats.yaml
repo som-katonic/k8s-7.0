@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate-add-starred-chats
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: migrate-add-starred-chats
+    app.kubernetes.io/component: migration
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app: migrate-add-starred-chats
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ .Values.image.postgres }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL at ${PG_HOST}:${PG_PORT}..."
+              until pg_isready -h "$PG_HOST" -p "$PG_PORT" -U "$POSTGRES_USER"; do
+                echo "  PostgreSQL not ready — retrying in 3s"
+                sleep 3
+              done
+              echo "PostgreSQL is ready!"
+          env:
+            - name: PG_HOST
+              value: {{ .Values.postgres.host }}
+            - name: PG_PORT
+              value: "{{ .Values.postgres.port }}"
+            - name: PG_USER
+              value: {{ .Values.postgres.user }}
+
+      containers:
+        - name: migrate
+          image: {{ .Values.image.postgres }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "=== Running migration: add is_starred to assistant_chat_sessions ==="
+
+              psql "postgresql://${PG_USER}:${PG_PASS}@${PG_HOST}:${PG_PORT}/${PG_DB}" <<'SQL'
+              ALTER TABLE assistant_chat_sessions
+                ADD COLUMN IF NOT EXISTS is_starred BOOLEAN NOT NULL DEFAULT FALSE;
+
+              CREATE INDEX IF NOT EXISTS idx_chat_sessions_starred
+                ON assistant_chat_sessions (assistant_chat_id, is_starred DESC, create_time DESC);
+              SQL
+
+              echo "=== Migration completed successfully ==="
+          env:
+            - name: PG_HOST
+              value: {{ .Values.postgres.host }}
+            - name: PG_PORT
+              value: "{{ .Values.postgres.port }}"
+            - name: PG_DB
+              value: {{ .Values.postgres.db }}
+            - name: PG_USER
+              value: {{ .Values.postgres.user }}
+            - name: PG_PASS
+              value: {{ .Values.postgres.password }}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}

@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-keycloak
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: seed-keycloak
+spec:
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        app: seed-keycloak
+        sidecar.istio.io/inject: "false"
+    spec:
+      restartPolicy: OnFailure
+
+      initContainers:
+        - name: wait-for-keycloak
+          image: {{ .Values.image.waitCurl }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Keycloak to be ready..."
+              until curl -sf http://keycloak:9000/auth/health/ready; do
+                echo "  Keycloak not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "Keycloak is ready!"
+
+      containers:
+        - name: seed
+          image: {{ .Values.image.seed }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              pip install -q python-keycloak>=4.0.0 && python /scripts/seed_keycloak.py
+          env:
+            - name: KEYCLOAK_URL
+              value: {{ .Values.keycloak.url }}
+            - name: KEYCLOAK_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: {{ .Values.keycloak.adminUserSecret }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: {{ .Values.keycloak.adminPassSecret }}
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: {{ .Values.keycloak.clientSecretSecret }}
+            - name: ADMIN_USER_PASSWORD
+              value: {{ .Values.keycloak.defaultAdminPass }}
+          volumeMounts:
+            - name: seed-script
+              mountPath: /scripts
+
+      volumes:
+        - name: seed-script
+          configMap:
+            name: seed-keycloak-script
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seed-keycloak-script
+  namespace: {{ .Values.namespace }}
+data:
+  seed_keycloak.py: |
+{{ .Files.Get "scripts/seed_keycloak.py" | indent 4 }}

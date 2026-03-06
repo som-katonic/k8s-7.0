@@ -1,0 +1,99 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-gateway
+  namespace: katonic
+spec:
+  selector:
+    app: mcp-gateway
+  ports:
+    - name: http-api
+      port: 8009
+      targetPort: 8009
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-gateway
+  namespace: katonic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-gateway
+  template:
+    metadata:
+      labels:
+        app: mcp-gateway
+    spec:
+      enableServiceLinks: false
+      imagePullSecrets:
+        - name: dockerhub-secret
+      containers:
+        - name: mcp-gateway
+          image: katonic/mcp-gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8009
+          env:
+            - name: PORT
+              value: "8009"
+            - name: MCP_TIMEOUT
+              value: "15"
+            - name: ADMIN_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: ADMIN_API_URL
+            - name: PLATFORM_ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: PLATFORM_ENVIRONMENT
+            # -- Keycloak --
+            - name: KEYCLOAK_SERVER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_SERVER_URL
+            - name: KEYCLOAK_REALM
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_REALM
+            - name: KEYCLOAK_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_AUDIENCE
+            - name: KEYCLOAK_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_ISSUER
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /v1/health
+              port: 8009
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8009
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8009
+            periodSeconds: 15
+            failureThreshold: 5

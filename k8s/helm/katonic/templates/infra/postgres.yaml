@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMap.name }}
+  namespace: {{ .Values.namespace }}
+data:
+  init-db.sql: |
+{{ .Values.configMap.initSQL | indent 4 }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.service.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    app: {{ .Values.service.selector }}
+  ports:
+    - name: tcp-postgres
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Values.statefulSet.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  serviceName: {{ .Values.statefulSet.serviceName }}
+  replicas: {{ .Values.statefulSet.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.statefulSet.selector }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.statefulSet.selector }}
+      annotations:
+        sidecar.istio.io/inject: "{{ .Values.statefulSet.sidecarInject }}"
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.statefulSet.container.image }}
+          ports:
+            - containerPort: {{ .Values.statefulSet.container.port }}
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.user.name }}
+                  key: {{ .Values.secrets.user.key }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.password.name }}
+                  key: {{ .Values.secrets.password.key }}
+            - name: POSTGRES_DB
+              value: {{ .Values.statefulSet.container.db }}
+            - name: PGDATA
+              value: {{ .Values.statefulSet.container.pgdata }}
+          volumeMounts:
+            - name: pgdata
+              mountPath: {{ .Values.statefulSet.container.pgdata }}
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            requests:
+              cpu: {{ .Values.statefulSet.resources.requests.cpu }}
+              memory: {{ .Values.statefulSet.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.statefulSet.resources.limits.cpu }}
+              memory: {{ .Values.statefulSet.resources.limits.memory }}
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.statefulSet.container.dbUser }}", "-d", "{{ .Values.statefulSet.container.db }}"]
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.statefulSet.container.dbUser }}", "-d", "{{ .Values.statefulSet.container.db }}"]
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.statefulSet.container.dbUser }}", "-d", "{{ .Values.statefulSet.container.db }}"]
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: {{ .Values.configMap.name }}
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.statefulSet.volume.storage }}
