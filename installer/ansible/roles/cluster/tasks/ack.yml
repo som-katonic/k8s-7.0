@@ -1,0 +1,60 @@
+# ============================================================================
+# Cluster Role - ACK Creation (Alibaba Cloud / SCCC)
+# ============================================================================
+# SCCC uses the same Alibaba APIs with me-riyadh region.
+# ============================================================================
+
+- name: Set ACK region
+  set_fact:
+    ack_region: "{{ 'me-riyadh' if sccc_mode | default(false) | bool else alibaba_region | default('cn-hangzhou') }}"
+
+- name: Set ACK facts
+  set_fact:
+    terraform_dir: "{{ installer_root }}/terraform/alibaba"
+
+- name: Initialize Terraform for ACK
+  shell: |
+    cd {{ terraform_dir }}
+    terraform init
+  args:
+    creates: "{{ terraform_dir }}/.terraform"
+
+- name: Generate Terraform variables
+  template:
+    src: ack-tfvars.j2
+    dest: "{{ terraform_dir }}/terraform.tfvars"
+
+- name: Create ACK cluster (this takes 15-25 minutes)
+  shell: |
+    cd {{ terraform_dir }}
+    terraform plan -out=tfplan.out
+    terraform apply -auto-approve tfplan.out 2>&1 | tee /tmp/terraform_ack.log
+  environment:
+    ALICLOUD_REGION: "{{ ack_region }}"
+    ALICLOUD_ACCESS_KEY: "{{ alibaba_access_key | default(omit) }}"
+    ALICLOUD_SECRET_KEY: "{{ alibaba_secret_key | default(omit) }}"
+  register: ack_create
+  async: 1800
+  poll: 30
+
+- name: Get ACK kubeconfig
+  shell: |
+    CLUSTER_ID=$(terraform -chdir={{ terraform_dir }} output -raw cluster_id)
+    aliyun cs GET /k8s/${CLUSTER_ID}/user_config \
+      --region {{ ack_region }} \
+      | jq -r '.config' > ~/.kube/config
+  register: ack_kubeconfig
+
+- name: Verify ACK connectivity
+  shell: kubectl get nodes --no-headers
+  register: ack_nodes
+  retries: 10
+  delay: 30
+  until: ack_nodes.rc == 0
+
+- name: Display ACK cluster info
+  debug:
+    msg: >-
+      {{ 'SCCC' if sccc_mode | default(false) | bool else 'ACK' }}
+      cluster {{ cluster_name }} ({{ ack_region }})
+      ready with {{ ack_nodes.stdout_lines | length }} nodes

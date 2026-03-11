@@ -1,0 +1,172 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: {{ include "katonic.namespace" . }}
+  labels:
+    {{- include "katonic.labels" . | nindent 4 }}
+data:
+  DEPLOYMENT_MODE: {{ .Values.global.deploymentMode | quote }}
+  PLATFORM_DOMAIN: {{ .Values.global.domain | quote }}
+  IMAGE_TAG: {{ include "katonic.imageTag" . | quote }}
+
+  # ---- Generic infrastructure (for services that read unprefixed vars) ----
+  POSTGRES_HOST: {{ .Values.global.postgresql.host | quote }}
+  POSTGRES_PORT: {{ .Values.global.postgresql.port | quote }}
+  POSTGRES_DATABASE: {{ .Values.global.postgresql.database | quote }}
+  POSTGRES_USER: {{ .Values.global.postgresql.username | quote }}
+  REDIS_HOST: {{ .Values.global.redis.host | quote }}
+  REDIS_PORT: {{ .Values.global.redis.port | quote }}
+  KEYCLOAK_SERVER_URL: {{ .Values.global.keycloak.serverUrl | quote }}
+  KEYCLOAK_ADMIN_USER: {{ .Values.global.keycloak.adminUser | quote }}
+  MILVUS_HOST: {{ .Values.global.milvus.host | quote }}
+  MILVUS_PORT: {{ .Values.global.milvus.port | quote }}
+  OBJECT_STORAGE_ENDPOINT: {{ .Values.global.objectStorage.endpoint | quote }}
+  OBJECT_STORAGE_BUCKET: {{ .Values.global.objectStorage.bucket | quote }}
+  OTEL_ENABLED: {{ .Values.global.otel.enabled | quote }}
+  {{- if .Values.global.otel.endpoint }}
+  OTEL_ENDPOINT: {{ .Values.global.otel.endpoint | quote }}
+  {{- end }}
+
+  # ---- Derived connection strings (reusable helpers) ----
+  # NOTE: Password-bearing connection strings should be injected via Secret env
+  # vars at runtime. These ConfigMap URLs use a placeholder that the platform-
+  # secrets Secret overrides. See platform-secrets.yaml for the actual values.
+  {{- $pgHost := .Values.global.postgresql.host }}
+  {{- $pgPort := toString .Values.global.postgresql.port }}
+  {{- $pgUser := .Values.global.postgresql.username }}
+  {{- $pgDB   := .Values.global.postgresql.database }}
+  {{- $pgURL := printf "postgresql+asyncpg://%s@%s:%s/%s" $pgUser $pgHost $pgPort $pgDB }}
+  {{- $redisURL := printf "redis://%s:%s" .Values.global.redis.host (toString .Values.global.redis.port) }}
+  {{- $ns := include "katonic.namespace" . }}
+
+  # ---- admin-api (ADMIN_ prefix) ----
+  ADMIN_POSTGRES_URL: {{ $pgURL | quote }}
+  ADMIN_REDIS_URL: "{{ $redisURL }}/0"
+  ADMIN_AI_GATEWAY_URL: "http://ai-gateway.{{ $ns }}.svc.cluster.local:8010"
+  ADMIN_GUARDRAILS_ENGINE_URL: "http://guardrails-engine.{{ $ns }}.svc.cluster.local:8006"
+  ADMIN_GOVERNANCE_PROXY_URL: "http://governance-proxy.{{ $ns }}.svc.cluster.local:8003"
+  ADMIN_KNOWLEDGE_ENGINE_URL: "http://knowledge-engine.{{ $ns }}.svc.cluster.local:8011"
+  ADMIN_MCP_GATEWAY_URL: "http://mcp-gateway.{{ $ns }}.svc.cluster.local:8009"
+  ADMIN_MARKETPLACE_URL: "http://marketplace.{{ $ns }}.svc.cluster.local:80"
+
+  # ---- observability (OBS_ prefix) ----
+  OBS_POSTGRES_URL: {{ $pgURL | quote }}
+  OBS_REDIS_URL: "{{ $redisURL }}/0"
+  OBS_CLICKHOUSE_HOST: {{ .Values.global.clickhouse.host | default "clickhouse.katonic-infra.svc.cluster.local" | quote }}
+  OBS_CLICKHOUSE_PORT: {{ .Values.global.clickhouse.port | default "8123" | quote }}
+  OBS_CLICKHOUSE_DATABASE: {{ .Values.global.clickhouse.database | default "platform" | quote }}
+
+  # ---- governance-proxy (GP_ prefix) ----
+  GP_POSTGRES_URL: {{ $pgURL | quote }}
+  GP_REDIS_URL: "{{ $redisURL }}/0"
+  GP_CLICKHOUSE_HOST: {{ .Values.global.clickhouse.host | default "clickhouse.katonic-infra.svc.cluster.local" | quote }}
+  GP_CLICKHOUSE_PORT: {{ .Values.global.clickhouse.port | default "8123" | quote }}
+  GP_CLICKHOUSE_DATABASE: {{ .Values.global.clickhouse.database | default "platform" | quote }}
+  GP_AI_GATEWAY_URL: "http://ai-gateway.{{ $ns }}.svc.cluster.local:8010"
+  GP_MCP_GATEWAY_URL: "http://mcp-gateway.{{ $ns }}.svc.cluster.local:8009"
+  GP_REMOTE_CONNECTIONS_URL: "http://remote-connections.{{ $ns }}.svc.cluster.local:8014"
+  GP_KNOWLEDGE_ENGINE_URL: "http://knowledge-engine.{{ $ns }}.svc.cluster.local:8011"
+
+  # ---- ai-gateway (GATEWAY_ prefix) ----
+  GATEWAY_POSTGRES_URL: {{ $pgURL | quote }}
+  GATEWAY_REDIS_URL: "{{ $redisURL }}/0"
+  GATEWAY_CLICKHOUSE_HOST: {{ .Values.global.clickhouse.host | default "clickhouse.katonic-infra.svc.cluster.local" | quote }}
+  GATEWAY_CLICKHOUSE_PORT: {{ .Values.global.clickhouse.port | default "8123" | quote }}
+  GATEWAY_HOST: "0.0.0.0"
+  GATEWAY_PORT: "8010"
+
+  # ---- knowledge-engine (KE_ prefix) ----
+  KE_POSTGRES_DSN: {{ printf "postgresql+asyncpg://%s@%s:%s/knowledge_engine" $pgUser $pgHost $pgPort | quote }}
+  KE_REDIS_URL: "{{ $redisURL }}/1"
+  KE_MILVUS_URI: "http://{{ .Values.global.milvus.host }}:{{ .Values.global.milvus.port }}"
+  KE_AI_GATEWAY_BASE_URL: "http://ai-gateway.{{ $ns }}.svc.cluster.local:8010"
+  KE_OBJECT_STORE_ENDPOINT: {{ .Values.global.objectStorage.endpoint | quote }}
+  KE_TEMPORAL_HOST: "{{ .Values.global.temporal.host }}:{{ .Values.global.temporal.port }}"
+  KE_TEMPORAL_NAMESPACE: {{ .Values.global.temporal.namespace | quote }}
+  KE_TEMPORAL_TASK_QUEUE: {{ .Values.global.temporal.taskQueue | quote }}
+
+  # ---- ace-bff (no prefix, uses plain env vars) ----
+  DB_URL: "mongodb://{{ .Values.global.mongodb.host | default "mongodb.katonic-infra.svc.cluster.local" }}:{{ .Values.global.mongodb.port | default "27017" }}/katonic"
+
+  # ---- Service URLs (internal cluster DNS) ----
+  ADMIN_API_URL: "http://admin-api.{{ $ns }}.svc.cluster.local:8004"
+  OBSERVABILITY_URL: "http://observability.{{ $ns }}.svc.cluster.local:8005"
+  GUARDRAILS_URL: "http://guardrails-engine.{{ $ns }}.svc.cluster.local:8006"
+  GOVERNANCE_PROXY_URL: "http://governance-proxy.{{ $ns }}.svc.cluster.local:8003"
+  AGENT_API_URL: "http://agent-api.{{ $ns }}.svc.cluster.local:8007"
+  AGENT_RUNTIME_URL: "http://agent-runtime.{{ $ns }}.svc.cluster.local:8008"
+  MCP_GATEWAY_URL: "http://mcp-gateway.{{ $ns }}.svc.cluster.local:8009"
+  AI_GATEWAY_URL: "http://ai-gateway.{{ $ns }}.svc.cluster.local:8010"
+  KNOWLEDGE_ENGINE_URL: "http://knowledge-engine.{{ $ns }}.svc.cluster.local:8011"
+  MODEL_DEPLOYMENT_URL: "http://model-deployment-service.{{ $ns }}.svc.cluster.local:8012"
+  WORKSPACE_SERVICE_URL: "http://workspace-service.{{ $ns }}.svc.cluster.local:8013"
+  REMOTE_CONNECTIONS_URL: "http://remote-connections.{{ $ns }}.svc.cluster.local:8014"
+  EVAL_ENGINE_URL: "http://eval-engine.{{ $ns }}.svc.cluster.local:8015"
+  PUBLIC_API_GATEWAY_URL: "http://public-api-gateway.{{ $ns }}.svc.cluster.local:8016"
+  KATONIC_MCP_SERVER_URL: "http://katonic-mcp-server.{{ $ns }}.svc.cluster.local:8017"
+  OPS_HUB_URL: "http://ops-hub.{{ $ns }}.svc.cluster.local:8018"
+  PROMPT_OPTIMIZER_URL: "http://prompt-optimizer.{{ $ns }}.svc.cluster.local:8019"
+  AUTOSCALER_URL: "http://autoscaler.{{ $ns }}.svc.cluster.local:8020"
+  RESOURCE_MANAGER_URL: "http://resource-manager.{{ $ns }}.svc.cluster.local:8021"
+  GPU_SLICING_URL: "http://gpu-slicing.{{ $ns }}.svc.cluster.local:8000"
+  TENANT_MANAGER_URL: "http://tenant-manager.{{ $ns }}.svc.cluster.local:8000"
+  ACE_BFF_URL: "http://ace-bff.{{ $ns }}.svc.cluster.local:3002"
+  MARKETPLACE_URL: "http://marketplace.{{ $ns }}.svc.cluster.local:80"
+  DISTRIBUTOR_CONSOLE_URL: "http://distributor-console.{{ $ns }}.svc.cluster.local:3020"
+  MLFLOW_TRACKING_URL: "http://mlflow.katonic-infra.svc.cluster.local:5000"
+
+  # ---- eval-engine (EVAL_ prefix) ----
+  EVAL_POSTGRES_URL: {{ $pgURL | quote }}
+  EVAL_REDIS_URL: "{{ $redisURL }}/2"
+  EVAL_AI_GATEWAY_URL: "http://ai-gateway.{{ $ns }}.svc.cluster.local:8010"
+  EVAL_KNOWLEDGE_ENGINE_URL: "http://knowledge-engine.{{ $ns }}.svc.cluster.local:8011"
+
+  # ---- public-api-gateway (PUBGW_ prefix) ----
+  PUBGW_ADMIN_API_URL: "http://admin-api.{{ $ns }}.svc.cluster.local:8004"
+  PUBGW_AGENT_API_URL: "http://agent-api.{{ $ns }}.svc.cluster.local:8007"
+  PUBGW_AI_GATEWAY_URL: "http://ai-gateway.{{ $ns }}.svc.cluster.local:8010"
+  PUBGW_KNOWLEDGE_ENGINE_URL: "http://knowledge-engine.{{ $ns }}.svc.cluster.local:8011"
+  PUBGW_EVAL_ENGINE_URL: "http://eval-engine.{{ $ns }}.svc.cluster.local:8015"
+  PUBGW_REDIS_URL: "{{ $redisURL }}/3"
+  PUBGW_DATABASE_URL: {{ $pgURL | quote }}
+
+  # ---- katonic-mcp-server (MCP_ prefix) ----
+  MCP_ADMIN_API_URL: "http://admin-api.{{ $ns }}.svc.cluster.local:8004"
+  MCP_AGENT_API_URL: "http://agent-api.{{ $ns }}.svc.cluster.local:8007"
+  MCP_KNOWLEDGE_ENGINE_URL: "http://knowledge-engine.{{ $ns }}.svc.cluster.local:8011"
+  MCP_EVAL_ENGINE_URL: "http://eval-engine.{{ $ns }}.svc.cluster.local:8015"
+
+  # ---- ops-hub (HUB_ prefix) ----
+  {{- $mongoHost := .Values.global.mongodb.host | default "mongodb.katonic-infra.svc.cluster.local" }}
+  {{- $mongoPort := .Values.global.mongodb.port | default "27017" }}
+  HUB_MONGODB_URL: "mongodb://{{ $mongoHost }}:{{ $mongoPort }}/ops_hub"
+
+  # ---- prompt-optimizer (OPTIMIZER_ prefix) ----
+  OPTIMIZER_AI_GATEWAY_URL: "http://ai-gateway.{{ $ns }}.svc.cluster.local:8010"
+  OPTIMIZER_EVAL_ENGINE_URL: "http://eval-engine.{{ $ns }}.svc.cluster.local:8015"
+  OPTIMIZER_ADMIN_API_URL: "http://admin-api.{{ $ns }}.svc.cluster.local:8004"
+  OPTIMIZER_REDIS_URL: "{{ $redisURL }}/4"
+
+  # ---- autoscaler (AUTOSCALER_ prefix) ----
+  AUTOSCALER_AI_GATEWAY_URL: "http://ai-gateway.{{ $ns }}.svc.cluster.local:8010"
+  AUTOSCALER_ADMIN_API_URL: "http://admin-api.{{ $ns }}.svc.cluster.local:8004"
+
+  # ---- resource-manager (RM_ prefix) ----
+  RM_NAMESPACE_PREFIX: "tenant-"
+  RM_TENANT_MANAGER_URL: "http://tenant-manager.{{ $ns }}.svc.cluster.local:8000"
+
+  # ---- gpu-slicing (GPU_ prefix) ----
+  GPU_AI_GATEWAY_URL: "http://ai-gateway.{{ $ns }}.svc.cluster.local:8010"
+  GPU_RESOURCE_MANAGER_URL: "http://resource-manager.{{ $ns }}.svc.cluster.local:8021"
+
+  # ---- tenant-manager (TM_ prefix) ----
+  TM_POSTGRES_URL: {{ $pgURL | quote }}
+  TM_REDIS_URL: "{{ $redisURL }}/5"
+  TM_KEYCLOAK_SERVER_URL: {{ .Values.global.keycloak.serverUrl | quote }}
+  TM_KEYCLOAK_ADMIN_USER: {{ .Values.global.keycloak.adminUser | quote }}
+  TM_DEPLOYMENT_MODE: {{ .Values.global.deploymentMode | quote }}
+  TM_AUTO_BOOTSTRAP: "true"
+
+  # ---- MLflow ----
+  MLFLOW_TRACKING_URI: "http://mlflow.katonic-infra.svc.cluster.local:5000"

@@ -1,0 +1,86 @@
+# ============================================================================
+# Istio Role
+# ============================================================================
+
+# -- Detect and handle existing ingress controllers (Rancher nginx, etc.) --
+- name: Check for existing nginx-ingress (Rancher/RKE2)
+  shell: |
+    # Check for Rancher's nginx-ingress
+    kubectl get deploy -A -l app.kubernetes.io/name=ingress-nginx -o name 2>/dev/null || \
+    kubectl get deploy -A -l app=ingress-nginx -o name 2>/dev/null || \
+    kubectl get daemonset -A -l app.kubernetes.io/name=rke2-ingress-nginx -o name 2>/dev/null || \
+    echo "none"
+  register: existing_ingress
+  ignore_errors: true
+
+- name: Scale down existing nginx-ingress to avoid port conflict with Istio
+  shell: |
+    # Scale down Rancher/RKE2 nginx-ingress so Istio can bind to 80/443
+    kubectl get deploy -A -l app.kubernetes.io/name=ingress-nginx --no-headers 2>/dev/null | while read ns name rest; do
+      kubectl scale deploy/$name -n $ns --replicas=0 || true
+    done
+    # Also handle RKE2 HelmChart addon
+    kubectl get helmchart rke2-ingress-nginx -n kube-system 2>/dev/null && \
+      kubectl patch helmchart rke2-ingress-nginx -n kube-system --type merge -p '{"spec":{"valuesContent":"controller:\n  replicaCount: 0"}}' || true
+  when: existing_ingress.stdout | default('none') != 'none'
+  ignore_errors: true
+
+- name: Log ingress controller status
+  debug:
+    msg: "{{ 'Existing nginx-ingress detected and scaled down to make room for Istio' if existing_ingress.stdout | default('none') != 'none' else 'No existing ingress controller found' }}"
+
+- name: Check if istio-system namespace exists
+  shell: kubectl get namespace istio-system
+  register: istio_exists
+  failed_when: false
+  changed_when: false
+
+- name: Install Istio base
+  shell: |
+    helm repo add istio https://istio-release.storage.googleapis.com/charts && helm repo update
+    helm upgrade --install istio-base istio/base --namespace istio-system --create-namespace --wait
+  when: istio_exists.rc != 0
+
+- name: Install istiod
+  shell: >
+    helm upgrade --install istiod istio/istiod
+    --namespace istio-system
+    --set pilot.resources.requests.memory=512Mi
+    --set pilot.resources.requests.cpu=250m
+    --wait --timeout 5m
+  when: istio_exists.rc != 0
+
+- name: Install Istio ingress gateway
+  shell: >
+    helm upgrade --install istio-ingress istio/gateway
+    --namespace istio-system
+    --set service.type={{ 'ClusterIP' if (internal_loadbalancer | default(False) | bool) else 'LoadBalancer' }}
+    --wait --timeout 5m
+
+- name: Wait for Istio ingress gateway
+  shell: >
+    kubectl wait --for=condition=ready pod
+    -l app=istio-ingress
+    -n istio-system
+    --timeout=300s
+  retries: 3
+  delay: 15
+
+- name: Get ingress gateway external IP
+  shell: >
+    kubectl get svc istio-ingress -n istio-system
+    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{.status.loadBalancer.ingress[0].ip}'
+  register: ingress_ip
+  retries: 10
+  delay: 30
+  until: ingress_ip.stdout != ""
+  when: not (internal_loadbalancer | default(False) | bool)
+  ignore_errors: true
+
+- name: Set ingress IP fact
+  set_fact:
+    platform_ingress_ip: "{{ ingress_ip.stdout | default('pending') }}"
+
+- name: Display Istio status
+  debug:
+    msg: "Istio ready. Ingress: {{ platform_ingress_ip | default('internal') }}"

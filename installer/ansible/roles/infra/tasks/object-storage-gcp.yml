@@ -1,0 +1,15 @@
+# ============================================================================
+# Infra Role - Cloud Object Storage (GCP Cloud Storage)
+# ============================================================================
+
+- name: Set GCS object storage facts
+  set_fact:
+    object_storage_type: "gcs"
+    object_storage_endpoint: "https://storage.googleapis.com"
+    object_storage_project: "{{ gcp_project_id }}"
+    object_storage_bucket_prefix: "{{ gcs_bucket_prefix | default('katonic') }}"
+  no_log: true
+
+- name: Display GCS configuration
+  debug:
+    msg: "Object storage: GCS (project: {{ gcp_project_id }})"

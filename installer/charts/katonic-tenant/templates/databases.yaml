@@ -1,0 +1,111 @@
+{{- /*
+Per-org database CRDs — provisioned by Kubernetes Operators.
+
+Requires cluster-wide operator installations:
+  - CloudNativePG   (postgresql.cnpg.io/v1)
+  - MongoDB Community Operator (mongodbcommunity.mongodb.com/v1)
+  - Milvus Operator (milvus.io/v1beta1)
+
+DNS endpoints (operator-generated):
+  Postgres  → {{ .Values.tenant.orgSlug }}-postgres-rw.{{ include "tenant.org_namespace" . }}:5432
+  MongoDB   → {{ .Values.tenant.orgSlug }}-mongodb-svc.{{ include "tenant.org_namespace" . }}:27017
+  Milvus    → {{ .Values.tenant.orgSlug }}-milvus-milvus.{{ include "tenant.org_namespace" . }}:19530
+*/ -}}
+
+{{- if .Values.databases.postgres.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Values.tenant.orgSlug }}-postgres
+  namespace: {{ include "tenant.org_namespace" . }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.databases.postgres.instances }}
+  storage:
+    size: {{ .Values.databases.postgres.storageSize }}
+  postgresql:
+    pg_hba: []
+  bootstrap:
+    initdb:
+      database: katonic
+      owner: katonic
+      secret:
+        name: {{ .Values.tenant.orgSlug }}-postgres-app-credentials
+  {{- if .Values.databases.postgres.backupBucket }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.databases.postgres.backupBucket }}/{{ .Values.tenant.orgSlug }}/postgres
+      s3Credentials:
+        inheritFromIAMRole: true
+      wal:
+        compression: gzip
+  {{- end }}
+{{- end }}
+
+{{- if .Values.databases.mongodb.enabled }}
+---
+apiVersion: mongodbcommunity.mongodb.com/v1
+kind: MongoDBCommunity
+metadata:
+  name: {{ .Values.tenant.orgSlug }}-mongodb
+  namespace: {{ include "tenant.org_namespace" . }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  members: {{ .Values.databases.mongodb.members }}
+  type: ReplicaSet
+  version: {{ .Values.databases.mongodb.version | quote }}
+  security:
+    authentication:
+      modes: ["SCRAM"]
+  users:
+    - name: katonic
+      db: admin
+      passwordSecretRef:
+        name: {{ .Values.tenant.orgSlug }}-mongodb-credentials
+      roles:
+        - name: clusterAdmin
+          db: admin
+        - name: userAdminAnyDatabase
+          db: admin
+        - name: dbAdminAnyDatabase
+          db: admin
+        - name: readWriteAnyDatabase
+          db: admin
+      scramCredentialsSecretName: {{ .Values.tenant.orgSlug }}-mongodb-scram
+  additionalMongodConfig:
+    storage.wiredTiger.engineConfig.journalCompressor: zlib
+{{- end }}
+
+{{- if .Values.databases.milvus.enabled }}
+---
+apiVersion: milvus.io/v1beta1
+kind: Milvus
+metadata:
+  name: {{ .Values.tenant.orgSlug }}-milvus
+  namespace: {{ include "tenant.org_namespace" . }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  mode: {{ .Values.databases.milvus.mode }}
+  components:
+    imageUpdateMode: rollingUpgrade
+  config: {}
+  dependencies:
+    etcd:
+      inCluster:
+        values:
+          replicaCount: 1
+          persistence:
+            enabled: true
+            size: 10Gi
+    storage:
+      inCluster:
+        values:
+          mode: standalone
+          persistence:
+            enabled: true
+            size: {{ .Values.databases.milvus.storageSize }}
+{{- end }}

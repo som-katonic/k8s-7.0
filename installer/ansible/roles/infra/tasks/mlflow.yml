@@ -1,0 +1,147 @@
+# ============================================================================
+# Infra Role - MLflow (Model Registry + Experiment Tracking)
+# ============================================================================
+# Deploys MLflow tracking server backed by PostgreSQL + MinIO artifact store.
+# Sprint 2 requirement: enables model-deployment-service to log fine-tune
+# runs and register models with stage transitions.
+# ============================================================================
+
+- name: Create MLflow PostgreSQL database
+  shell: |
+    kubectl -n katonic-infra exec -it \
+      $(kubectl -n katonic-infra get pod -l app.kubernetes.io/name=postgresql -o name | head -1 | sed 's|pod/||') \
+      -- psql -U {{ pg_user | default('platform') }} -c "CREATE DATABASE mlflow;" || true
+
+- name: Create MLflow secret
+  shell: |
+    kubectl -n katonic-infra create secret generic mlflow-credentials \
+      --from-literal=postgres-url="postgresql://{{ pg_user | default('platform') }}:{{ pg_password | default('platform') }}@postgresql.katonic-infra.svc.cluster.local:5432/mlflow" \
+      --from-literal=artifact-root="s3://{{ mlflow_artifact_bucket | default('katonic-mlflow') }}" \
+      --from-literal=aws-access-key-id="{{ minio_access_key | default('minioadmin') }}" \
+      --from-literal=aws-secret-access-key="{{ minio_secret_key | default('minioadmin') }}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  no_log: true
+
+- name: Create MLflow artifact bucket in MinIO
+  shell: |
+    kubectl -n katonic-infra exec \
+      $(kubectl -n katonic-infra get pod -l app.kubernetes.io/name=minio -o name | head -1 | sed 's|pod/||') \
+      -- mc alias set local http://localhost:9000 minioadmin minioadmin 2>/dev/null || true
+    kubectl -n katonic-infra exec \
+      $(kubectl -n katonic-infra get pod -l app.kubernetes.io/name=minio -o name | head -1 | sed 's|pod/||') \
+      -- mc mb local/{{ mlflow_artifact_bucket | default('katonic-mlflow') }} --ignore-existing 2>/dev/null || true
+  when: resolved_object_storage | trim == 'minio'
+  ignore_errors: true
+
+- name: Deploy MLflow tracking server
+  shell: |
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: mlflow
+      namespace: katonic-infra
+      labels:
+        app: mlflow
+        app.kubernetes.io/name: mlflow
+        app.kubernetes.io/version: "2.11.3"
+    spec:
+      replicas: {{ mlflow_replicas | default(1) }}
+      selector:
+        matchLabels:
+          app: mlflow
+      template:
+        metadata:
+          labels:
+            app: mlflow
+        spec:
+          containers:
+            - name: mlflow
+              image: ghcr.io/mlflow/mlflow:v2.11.3
+              command:
+                - mlflow
+                - server
+                - --host=0.0.0.0
+                - --port=5000
+                - --backend-store-uri=$(MLFLOW_POSTGRES_URL)
+                - --artifacts-destination=$(MLFLOW_ARTIFACT_ROOT)
+                - --serve-artifacts
+              ports:
+                - containerPort: 5000
+                  name: http
+              env:
+                - name: MLFLOW_POSTGRES_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: mlflow-credentials
+                      key: postgres-url
+                - name: MLFLOW_ARTIFACT_ROOT
+                  valueFrom:
+                    secretKeyRef:
+                      name: mlflow-credentials
+                      key: artifact-root
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: mlflow-credentials
+                      key: aws-access-key-id
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: mlflow-credentials
+                      key: aws-secret-access-key
+                - name: MLFLOW_S3_ENDPOINT_URL
+                  value: "http://minio.katonic-infra.svc.cluster.local:9000"
+                - name: MLFLOW_S3_IGNORE_TLS
+                  value: "true"
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "1"
+                  memory: 2Gi
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 5000
+                initialDelaySeconds: 30
+                periodSeconds: 10
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 5000
+                initialDelaySeconds: 10
+                periodSeconds: 5
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: mlflow
+      namespace: katonic-infra
+      labels:
+        app: mlflow
+    spec:
+      selector:
+        app: mlflow
+      ports:
+        - name: http
+          port: 5000
+          targetPort: 5000
+    EOF
+
+- name: Wait for MLflow to be ready
+  shell: |
+    kubectl -n katonic-infra wait --for=condition=available deployment/mlflow \
+      --timeout=120s
+  register: mlflow_ready
+  retries: 3
+  delay: 10
+
+- name: Record MLflow endpoint in facts
+  set_fact:
+    mlflow_tracking_url: "http://mlflow.katonic-infra.svc.cluster.local:5000"
+
+- name: Display MLflow deployment status
+  debug:
+    msg: "MLflow deployed at {{ mlflow_tracking_url }}"

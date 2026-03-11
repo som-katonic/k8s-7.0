@@ -1,0 +1,37 @@
+# ===========================================================================
+# Cluster role: Route to the correct cloud provider task file
+#
+# Reads cloud_provider from inventory and delegates to the appropriate
+# task file for cluster creation.
+# ===========================================================================
+---
+- name: "[cluster] Route to cloud provider"
+  ansible.builtin.include_tasks: "{{ cloud_provider }}.yml"
+  when: cloud_provider in ['eks', 'aks', 'gke', 'oke', 'ack']
+
+- name: "[cluster] Route to EKS"
+  ansible.builtin.include_tasks: eks.yml
+  when: cloud_provider == 'aws'
+
+- name: "[cluster] Route to AKS"
+  ansible.builtin.include_tasks: aks.yml
+  when: cloud_provider == 'azure'
+
+- name: "[cluster] Route to GKE"
+  ansible.builtin.include_tasks: gke.yml
+  when: cloud_provider == 'gcp'
+
+- name: "[cluster] Route to OKE"
+  ansible.builtin.include_tasks: oke.yml
+  when: cloud_provider == 'oci'
+
+- name: "[cluster] Route to ACK"
+  ansible.builtin.include_tasks: ack.yml
+  when: cloud_provider == 'alibaba'
+
+- name: "[cluster] Use existing cluster"
+  ansible.builtin.include_tasks: existing.yml
+  when: cloud_provider == 'bare_metal'
+
+- name: "[cluster] Verify cluster access"
+  ansible.builtin.include_tasks: verify.yml

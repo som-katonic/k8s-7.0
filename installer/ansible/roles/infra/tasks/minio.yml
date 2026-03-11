@@ -1,0 +1,45 @@
+# ============================================================================
+# Infra Role - MinIO
+# ============================================================================
+
+- name: Generate MinIO credentials
+  shell: openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 24
+  register: minio_password_gen
+  no_log: true
+
+- name: Set MinIO facts
+  set_fact:
+    minio_access_key: "katonic-admin"
+    minio_secret_key: "{{ minio_password_gen.stdout }}"
+    minio_endpoint: "http://minio.katonic-infra.svc.cluster.local:9000"
+  no_log: true
+
+- name: Add MinIO Helm repo
+  shell: helm repo add minio https://charts.min.io/ && helm repo update
+  ignore_errors: true
+
+- name: Deploy MinIO
+  shell: >
+    helm upgrade --install minio minio/minio
+    --namespace katonic-infra
+    --set rootUser={{ minio_access_key }}
+    --set rootPassword={{ minio_secret_key }}
+    --set persistence.size={{ minio_storage_size | default('250Gi') }}
+    --set resources.requests.memory=1Gi
+    --set resources.requests.cpu=500m
+    --set mode=standalone
+    --set consoleService.type=ClusterIP
+    --wait --timeout 10m
+
+- name: Wait for MinIO ready
+  shell: >
+    kubectl wait --for=condition=ready pod
+    -l app.kubernetes.io/name=minio
+    -n katonic-infra
+    --timeout=300s
+  retries: 3
+  delay: 15
+
+- name: Display MinIO status
+  debug:
+    msg: "MinIO deployed at {{ minio_endpoint }}"

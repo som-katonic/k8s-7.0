@@ -1,0 +1,57 @@
+# ============================================================================
+# Cluster Role - EKS Creation (AWS)
+# ============================================================================
+
+- name: Set EKS cluster facts
+  set_fact:
+    eks_full_name: "{{ cluster_name }}"
+    terraform_dir: "{{ installer_root }}/terraform/aws"
+
+- name: Initialize Terraform for EKS
+  shell: |
+    cd {{ terraform_dir }}
+    terraform init
+  args:
+    creates: "{{ terraform_dir }}/.terraform"
+
+- name: Generate Terraform variables
+  template:
+    src: eks-tfvars.j2
+    dest: "{{ terraform_dir }}/terraform.tfvars"
+
+- name: Plan EKS cluster
+  shell: |
+    cd {{ terraform_dir }}
+    terraform plan -out=tfplan.out
+  register: tf_plan
+
+- name: Create EKS cluster (this takes 15-25 minutes)
+  shell: |
+    cd {{ terraform_dir }}
+    terraform apply -auto-approve tfplan.out 2>&1 | tee /tmp/terraform_apply.log
+  register: tf_apply
+  async: 1800
+  poll: 30
+
+- name: Get EKS credentials
+  shell: >
+    aws eks update-kubeconfig
+    --name {{ eks_full_name }}
+    --region {{ aws_region }}
+  register: kubeconfig_result
+
+- name: Verify EKS connectivity
+  shell: kubectl get nodes --no-headers
+  register: eks_nodes
+  retries: 10
+  delay: 30
+  until: eks_nodes.rc == 0
+
+- name: Display EKS cluster info
+  debug:
+    msg: "EKS cluster {{ eks_full_name }} ready with {{ eks_nodes.stdout_lines | length }} nodes"
+
+- name: Enable cluster autoscaler
+  shell: |
+    kubectl apply -f {{ installer_root }}/ansible/roles/cluster/files/cluster-autoscaler-aws.yaml
+  when: autoscaler_enable | default(True) | bool

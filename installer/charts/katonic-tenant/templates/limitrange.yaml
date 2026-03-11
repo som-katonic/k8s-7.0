@@ -1,0 +1,21 @@
+{{- if .Values.limitRange.enabled }}
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tenant-limits
+  namespace: {{ include "tenant.namespace" . }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: {{ .Values.limitRange.defaultCpu | quote }}
+        memory: {{ .Values.limitRange.defaultMemory | quote }}
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+      max:
+        cpu: {{ .Values.limitRange.maxCpu | quote }}
+        memory: {{ .Values.limitRange.maxMemory | quote }}
+{{- end }}

@@ -1,0 +1,48 @@
+# ============================================================================
+# Cluster Role - OKE Creation (Oracle Cloud)
+# ============================================================================
+
+- name: Set OKE facts
+  set_fact:
+    terraform_dir: "{{ installer_root }}/terraform/oci"
+
+- name: Initialize Terraform for OKE
+  shell: |
+    cd {{ terraform_dir }}
+    terraform init
+  args:
+    creates: "{{ terraform_dir }}/.terraform"
+
+- name: Generate Terraform variables
+  template:
+    src: oke-tfvars.j2
+    dest: "{{ terraform_dir }}/terraform.tfvars"
+
+- name: Create OKE cluster (this takes 15-25 minutes)
+  shell: |
+    cd {{ terraform_dir }}
+    terraform plan -out=tfplan.out
+    terraform apply -auto-approve tfplan.out 2>&1 | tee /tmp/terraform_oke.log
+  register: oke_create
+  async: 1800
+  poll: 30
+
+- name: Get OKE credentials
+  shell: >
+    oci ce cluster create-kubeconfig
+    --cluster-id $(terraform -chdir={{ terraform_dir }} output -raw cluster_id)
+    --file ~/.kube/config
+    --region {{ oci_region }}
+    --token-version 2.0.0
+  register: oke_kubeconfig
+
+- name: Verify OKE connectivity
+  shell: kubectl get nodes --no-headers
+  register: oke_nodes
+  retries: 10
+  delay: 30
+  until: oke_nodes.rc == 0
+
+- name: Display OKE cluster info
+  debug:
+    msg: "OKE cluster {{ cluster_name }} ready with {{ oke_nodes.stdout_lines | length }} nodes"

@@ -1,0 +1,104 @@
+# ===========================================================================
+# Backup role: Deploy Velero for cluster backup/restore
+#
+# Triggered when backup_enabled: true in katonic.yml
+#
+# Supports:
+#   - AWS S3 (BackupStorageLocation)
+#   - Azure Blob Storage
+#   - GCP GCS
+#   - S3-compatible (MinIO)
+#
+# GAP-2 from REVIEW.md: katonic.yml had backup config but no role deployed it.
+# ===========================================================================
+---
+- name: "[backup] Preflight: backup_s3_bucket must be set when backup is enabled"
+  ansible.builtin.assert:
+    that:
+      - backup_s3_bucket is defined
+      - backup_s3_bucket | length > 0
+    fail_msg: >
+      backup_enabled is True but backup_s3_bucket is not set.
+      Set backup_s3_bucket in inventory/katonic.yml (e.g. "katonic-backups-prod")
+      or disable backup with backup_enabled: False.
+    success_msg: "Backup preflight passed. Bucket: {{ backup_s3_bucket }}"
+  when: backup_enabled | default(false) | bool
+
+- name: "[backup] Skip if backup not enabled"
+  when: not (backup_enabled | default(false) | bool)
+  ansible.builtin.debug:
+    msg: "Backup not enabled. Set backup_enabled: true to deploy Velero."
+
+- name: "[backup] Add Velero Helm repo"
+  when: backup_enabled | default(false) | bool
+  ansible.builtin.shell: |
+    helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts
+    helm repo update
+  ignore_errors: true
+
+- name: "[backup] Create backup namespace"
+  when: backup_enabled | default(false) | bool
+  ansible.builtin.shell: |
+    kubectl create namespace velero --dry-run=client -o yaml | kubectl apply -f -
+
+- name: "[backup] Set backup provider facts"
+  when: backup_enabled | default(false) | bool
+  ansible.builtin.set_fact:
+    velero_provider: >-
+      {% if cloud_provider == 'aws' %}aws
+      {% elif cloud_provider == 'azure' %}azure
+      {% elif cloud_provider == 'gcp' %}gcp
+      {% else %}aws{% endif %}
+    velero_bucket: "{{ backup_s3_bucket | default('katonic-backups') }}"
+    velero_schedule: "{{ backup_schedule | default('0 2 * * *') }}"
+    velero_retention: "{{ backup_retention | default('720h') }}"
+
+# AWS S3
+- name: "[backup] Create AWS credentials secret"
+  when:
+    - backup_enabled | default(false) | bool
+    - cloud_provider == 'aws'
+  ansible.builtin.shell: |
+    cat > /tmp/velero-credentials <<EOF
+    [default]
+    aws_access_key_id={{ lookup('env', 'AWS_ACCESS_KEY_ID') }}
+    aws_secret_access_key={{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}
+    EOF
+    kubectl create secret generic velero-credentials \
+      --namespace velero \
+      --from-file=cloud=/tmp/velero-credentials \
+      --dry-run=client -o yaml | kubectl apply -f -
+    rm -f /tmp/velero-credentials
+  no_log: true
+
+# Deploy Velero
+- name: "[backup] Deploy Velero via Helm"
+  when: backup_enabled | default(false) | bool
+  ansible.builtin.shell: |
+    helm upgrade --install velero vmware-tanzu/velero \
+      --namespace velero \
+      --set configuration.backupStorageLocation[0].name=default \
+      --set configuration.backupStorageLocation[0].provider={{ velero_provider | trim }} \
+      --set configuration.backupStorageLocation[0].bucket={{ velero_bucket }} \
+      --set configuration.backupStorageLocation[0].config.region={{ cloud_region | default('us-east-1') }} \
+      --set configuration.volumeSnapshotLocation[0].name=default \
+      --set configuration.volumeSnapshotLocation[0].provider={{ velero_provider | trim }} \
+      --set configuration.volumeSnapshotLocation[0].config.region={{ cloud_region | default('us-east-1') }} \
+      --set credentials.existingSecret=velero-credentials \
+      --set initContainers[0].name=velero-plugin-for-{{ velero_provider | trim }} \
+      --set initContainers[0].image=velero/velero-plugin-for-{{ velero_provider | trim }}:v1.9.0 \
+      --set initContainers[0].volumeMounts[0].mountPath=/target \
+      --set initContainers[0].volumeMounts[0].name=plugins \
+      --set schedules.daily.disabled=false \
+      --set schedules.daily.schedule="{{ velero_schedule }}" \
+      --set schedules.daily.template.ttl="{{ velero_retention }}" \
+      --set schedules.daily.template.includedNamespaces[0]=katonic-system \
+      --set schedules.daily.template.includedNamespaces[1]=katonic-infra \
+      --set schedules.daily.template.includedNamespaces[2]=katonic-keycloak \
+      --wait --timeout 5m
+  register: velero_result
+
+- name: "[backup] Velero deployment status"
+  when: backup_enabled | default(false) | bool
+  ansible.builtin.debug:
+    msg: "Velero deployed. Schedule: {{ velero_schedule }}, Retention: {{ velero_retention }}, Bucket: {{ velero_bucket }}"

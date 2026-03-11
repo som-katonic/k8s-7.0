@@ -1,0 +1,46 @@
+# ============================================================================
+# Infra Role - Managed DB (AWS Cloud SQL PostgreSQL)
+# ============================================================================
+
+- name: Set managed DB credentials from config
+  set_fact:
+    db_host: "{{ managed_db_host }}"
+    db_port: "{{ managed_db_port | default('5432') }}"
+    db_name: "{{ managed_db_name | default('katonic') }}"
+    db_user: "{{ managed_db_user | default('katonic') }}"
+    db_password: "{{ managed_db_password }}"
+    db_connection_string: "postgresql://{{ managed_db_user | default('katonic') }}:{{ managed_db_password }}@{{ managed_db_host }}:{{ managed_db_port | default('5432') }}/{{ managed_db_name | default('katonic') }}{% if managed_db_ssl | default(True) | bool %}?sslmode=require{% endif %}"
+  no_log: true
+
+- name: Test managed DB connectivity
+  shell: |
+    python3 -c "
+    import subprocess, sys
+    try:
+        result = subprocess.run(
+            ['python3', '-c', '''
+import socket
+s = socket.create_connection((\"{{ db_host }}\", {{ db_port }}), timeout=10)
+s.close()
+print(\"OK\")
+'''],
+            capture_output=True, text=True, timeout=15
+        )
+        if 'OK' in result.stdout:
+            print('Connection successful')
+            sys.exit(0)
+        else:
+            print(f'Connection failed: {result.stderr}')
+            sys.exit(1)
+    except Exception as e:
+        print(f'Connection failed: {e}')
+        sys.exit(1)
+    "
+  register: db_test
+  retries: 3
+  delay: 10
+  until: db_test.rc == 0
+
+- name: Display managed DB status
+  debug:
+    msg: "Using managed Cloud SQL PostgreSQL at {{ db_host }}:{{ db_port }}/{{ db_name }}"

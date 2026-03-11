@@ -1,0 +1,142 @@
+# ======================================================================
+# Katonic AI Platform v7 - Installer Configuration
+# ======================================================================
+# Copy to katonic.yml and edit for your environment.
+#
+# Required fields: cloud_provider, domain, admin_email
+# Everything else has sensible defaults.
+# ======================================================================
+
+# -- Target Cloud ----------------------------------------------------------
+cloud_provider: "aws"           # aws | azure | gcp | oci | alibaba | bare_metal
+cloud_region: "us-east-1"
+
+# -- On-Premise / Bare Metal -----------------------------------------------
+# For SUSE Linux Enterprise, RHEL, Ubuntu on bare-metal or VMs:
+#   cloud_provider: "bare_metal"
+#   create_cluster: true           # Installs RKE2 on target nodes
+#   kubernetes_distribution: "rke2" # rke2 | k3s | existing
+#   node_ips:
+#     control_plane: ["10.0.1.10", "10.0.1.11", "10.0.1.12"]
+#     workers: ["10.0.1.20", "10.0.1.21", "10.0.1.22"]
+#     gpu_workers: []
+#   ssh_user: "root"
+#   ssh_key_path: "~/.ssh/id_rsa"
+#   metallb_address_pool: "10.0.1.100-10.0.1.110"  # IP range for LoadBalancer
+#   storage_provider: "longhorn"   # longhorn | local-path | nfs
+
+# -- Cluster --------------------------------------------------------------
+cluster_name: "katonic-prod"
+kubernetes_version: "1.30"
+# eks_version: "1.30"
+# aks_version: "1.30"
+# gke_version: "1.30.2-gke.1"
+
+# -- Networking ------------------------------------------------------------
+domain: "ai.company.com"
+subdomain_pattern: "{org}.{domain}"
+tls_mode: "letsencrypt"         # letsencrypt | custom | self_signed
+tls_email: "ops@company.com"
+# custom_tls_cert: "/path/to/cert.pem"
+# custom_tls_key: "/path/to/key.pem"
+
+# -- Platform Variant ------------------------------------------------------
+platform_variant: "Enterprise"  # Enterprise | Gov | Distributor
+deployment_mode: "platform"     # platform (single-tenant) | cloud (multi-tenant)
+
+# -- Multi-Tenancy (only when deployment_mode=cloud) ----------------------
+# multi_tenancy:
+#   max_orgs: 50
+#   max_environments_per_org: 3
+#   max_users_per_org: 500
+#   default_org_slug: "default"
+
+# -- Admin -----------------------------------------------------------------
+admin_email: "admin@company.com"
+
+# -- License ---------------------------------------------------------------
+license_file: "/katonic/license.json"
+
+# -- Image -----------------------------------------------------------------
+image_tag: "7.0.0"
+image_registry: "registry.katonic.ai"
+
+# -- Authentication --------------------------------------------------------
+keycloak_admin_password: "CHANGE_ME"
+
+# -- Database --------------------------------------------------------------
+database_mode: "in_cluster"     # in_cluster | managed
+# managed_db_host: "mydb.xxx.rds.amazonaws.com"
+# managed_db_port: 5432
+# managed_db_user: "katonic"
+# managed_db_password: "CHANGE_ME"
+
+# -- Storage ---------------------------------------------------------------
+object_storage: "minio"         # minio | s3 | azure_blob | gcs | oci_os | oss
+# s3_bucket: "katonic-data"
+# s3_region: "us-east-1"
+
+# -- Vector Database -------------------------------------------------------
+milvus_mode: "standalone"       # standalone | distributed
+# milvus_replicas: 3
+
+# -- GPU -------------------------------------------------------------------
+gpu_enabled: false
+gpu_node_count: 0
+gpu_instance_type: ""
+gpu_slicing_enabled: false
+
+# -- Node Pools ------------------------------------------------------------
+node_pools:
+  platform:
+    count: 3
+    instance_type: "m5.xlarge"
+    disk_size_gb: 100
+  compute:
+    count: 2
+    instance_type: "m5.2xlarge"
+    disk_size_gb: 200
+  vectordb:
+    count: 1
+    instance_type: "r5.xlarge"
+    disk_size_gb: 500
+
+# -- Monitoring ------------------------------------------------------------
+monitoring_enabled: true
+prometheus_retention: "30d"
+grafana_enabled: true
+
+# -- Backup ----------------------------------------------------------------
+backup_enabled: false
+# backup_schedule: "0 2 * * *"
+# backup_retention: "30d"
+# backup_s3_bucket: "katonic-backups"
+
+# -- Air-Gap ---------------------------------------------------------------
+airgap_enabled: false
+# private_registry: "harbor.internal:5000"
+# image_bundle: "/katonic/images.tar.gz"
+
+# -- Advanced --------------------------------------------------------------
+helm_timeout: "15m"
+log_level: "INFO"
+otel_enabled: true
+
+# -- Terraform State Backend -----------------------------------------------
+# Run scripts/create-state-backend.sh once before first install to create
+# the bucket. The installer auto-generates backend.tf from these settings.
+# terraform_state:
+#   backend: "s3"           # s3 | gcs | azurerm | oss | local
+#   bucket: "katonic-tf-state"
+#   region: "us-east-1"     # defaults to cloud_region
+#   lock_table: "katonic-tf-lock"  # AWS DynamoDB table name
+
+# -- Network Policies ------------------------------------------------------
+# Required for Gov and Distributor compliance. Restricts cross-namespace
+# traffic so only platform can reach infra, and only Istio can reach platform.
+networkpolicy_enabled: false
+
+# -- MCP Catalog -----------------------------------------------------------
+# "bundled" uses data/mcp-catalog.json shipped with installer (required for air-gap).
+# "registry" fetches fresh catalog from Docker Hub at install time.
+mcp_catalog_source: "bundled"   # bundled | registry

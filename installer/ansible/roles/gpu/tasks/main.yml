@@ -1,0 +1,30 @@
+# ============================================================================
+# GPU Role - Enable GPU support
+# ============================================================================
+
+- name: Install NVIDIA device plugin
+  shell: >
+    kubectl apply -f
+    https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.15.0/deployments/static/nvidia-device-plugin.yml
+  ignore_errors: true
+
+- name: Wait for GPU device plugin
+  shell: >
+    kubectl wait --for=condition=ready pod
+    -l name=nvidia-device-plugin-ds
+    -n kube-system
+    --timeout=300s
+  retries: 3
+  delay: 30
+  ignore_errors: true
+
+- name: Detect GPU nodes
+  shell: >
+    kubectl get nodes -l nvidia.com/gpu.present=true
+    --no-headers 2>/dev/null | wc -l
+  register: gpu_node_count
+  ignore_errors: true
+
+- name: Display GPU status
+  debug:
+    msg: "GPU support enabled. {{ gpu_node_count.stdout | default(0) }} GPU node(s) detected."

@@ -1,0 +1,407 @@
+# =============================================================================
+# Katonic Platform - Umbrella Helm Chart Values
+# =============================================================================
+# Generic services are defined in a map. The templates/deployment.yaml and
+# templates/service.yaml iterate over this map automatically.
+#
+# Only tenant-manager, model-deployment, and ace-bff have dedicated subcharts
+# because they need special K8s resources (ClusterRole, GPU, WebSocket).
+# =============================================================================
+
+global:
+  imageRegistry: "registry.katonic.ai"
+  imagePullPolicy: IfNotPresent
+  imageTag: "7.0.0"
+  imagePullSecrets: []
+  namespace: katonic-system
+  domain: "ai.company.com"
+  deploymentMode: "platform"
+
+  postgresql:
+    host: "postgresql.katonic-infra.svc.cluster.local"
+    port: 5432
+    database: "platform"
+    username: "platform"
+    # password: ""  # DO NOT set here — use existingSecret instead
+    existingSecret: "platform-db-credentials"
+    existingSecretKey: "password"
+
+  redis:
+    host: "redis-master.katonic-infra.svc.cluster.local"
+    port: 6379
+    existingSecret: "platform-redis-credentials"
+    existingSecretKey: "password"
+
+  keycloak:
+    serverUrl: "http://keycloak.katonic-keycloak.svc.cluster.local:8080"
+    adminUser: "admin"
+    existingSecret: "platform-keycloak-credentials"
+    existingSecretKey: "admin-password"
+
+  milvus:
+    host: "milvus.katonic-infra.svc.cluster.local"
+    port: 19530
+
+  clickhouse:
+    host: "clickhouse.katonic-infra.svc.cluster.local"
+    port: 8123
+    database: "platform"
+    user: "default"
+    # password: ""  # Set via existingSecret in production
+    existingSecret: ""
+    existingSecretKey: "password"
+
+  mongodb:
+    host: "mongodb.katonic-infra.svc.cluster.local"
+    port: 27017
+    database: "katonic"
+
+  temporal:
+    host: "temporal.katonic-infra.svc.cluster.local"
+    port: 7233
+    namespace: "default"
+    taskQueue: "knowledge-engine"
+
+  objectStorage:
+    endpoint: "minio.katonic-infra.svc.cluster.local:9000"
+    bucket: "katonic-data"
+    existingSecret: "platform-minio-credentials"
+    accessKeyField: "access-key"
+    secretKeyField: "secret-key"
+
+  otel:
+    enabled: false
+    endpoint: ""
+
+# =============================================================================
+# Generic Services
+# =============================================================================
+# Each entry produces one Deployment + one Service via the generic templates.
+# To add a new service: add one block here. No new template files needed.
+#
+# Optional fields per service:
+#   extraEnv:          []  - additional env vars [{name, value}]
+#   extraVolumes:      []  - additional volumes
+#   extraVolumeMounts: []  - additional volume mounts
+#   healthPath:        "/healthz" - override health check path
+#   nodeSelector:      {}  - scheduling constraints
+#   tolerations:       []  - tolerations
+#   annotations:       {}  - pod annotations
+#   command:           []  - override container command
+#   args:              []  - override container args
+# =============================================================================
+
+services:
+  admin-api:
+    enabled: true
+    port: 8004
+    replicas: 2
+    image: katonic/admin-api
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+  observability:
+    enabled: true
+    port: 8005
+    replicas: 1
+    image: katonic/observability
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+  guardrails-engine:
+    enabled: true
+    port: 8006
+    replicas: 2
+    image: katonic/guardrails-engine
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { cpu: "2", memory: 2Gi }
+
+  governance-proxy:
+    enabled: true
+    port: 8003
+    replicas: 2
+    image: katonic/governance-proxy
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: "1", memory: 512Mi }
+
+  agent-api:
+    enabled: true
+    port: 8007
+    replicas: 2
+    image: katonic/agent-api
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { cpu: "2", memory: 2Gi }
+    hpa:
+      enabled: false      # Set true in production
+      minReplicas: 2
+      maxReplicas: 8
+      targetCPU: 70
+
+  agent-runtime:
+    enabled: true
+    port: 8008
+    replicas: 2
+    image: katonic/agent-runtime
+    resources:
+      requests: { cpu: "1", memory: 2Gi }
+      limits: { cpu: "4", memory: 4Gi }
+    hpa:
+      enabled: false      # Set true in production
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPU: 65
+
+  mcp-gateway:
+    enabled: true
+    port: 8009
+    replicas: 2
+    image: katonic/mcp-gateway
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+  ai-gateway:
+    enabled: true
+    port: 8010
+    replicas: 2
+    image: katonic/ai-gateway
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { cpu: "2", memory: 2Gi }
+    hpa:
+      enabled: false      # Set true in production
+      minReplicas: 2
+      maxReplicas: 8
+      targetCPU: 70
+
+  knowledge-engine:
+    enabled: true
+    port: 8011
+    replicas: 2
+    image: katonic/knowledge-engine
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { cpu: "2", memory: 4Gi }
+
+  workspace-service:
+    enabled: true
+    port: 8013
+    replicas: 1
+    image: katonic/workspace-service
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+
+  remote-connections:
+    enabled: true
+    port: 8014
+    replicas: 1
+    image: katonic/remote-connections
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+
+  ops-console:
+    enabled: true
+    port: 3000
+    replicas: 1
+    image: katonic/ops-console
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    healthPath: "/"
+
+  agent-studio:
+    enabled: true
+    port: 3001
+    replicas: 1
+    image: katonic/agent-studio
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    healthPath: "/"
+
+  employee-workspace:
+    enabled: true
+    port: 3010
+    replicas: 2
+    image: katonic/employee-workspace
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    healthPath: "/"
+
+  marketplace:
+    enabled: true
+    port: 80
+    replicas: 1
+    image: katonic/marketplace
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    healthPath: "/"
+
+  distributor-console:
+    enabled: false
+    port: 3020
+    replicas: 1
+    image: katonic/distributor-console
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    healthPath: "/"
+    extraEnv:
+      - name: TENANT_MANAGER_UPSTREAM
+        value: "http://tenant-manager.katonic-system.svc.cluster.local:8000"
+      - name: PROMETHEUS_UPSTREAM
+        value: "http://prometheus-kube-prometheus-prometheus.katonic-monitoring.svc.cluster.local:9090"
+
+  # ── New services added in Sprints 3–16 ─────────────────────────────────────
+
+  eval-engine:
+    enabled: true
+    port: 8015
+    replicas: 2
+    image: katonic/eval-engine
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { cpu: "2", memory: 2Gi }
+
+  public-api-gateway:
+    enabled: true
+    port: 8016
+    replicas: 2
+    image: katonic/public-api-gateway
+    healthPath: "/health"
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: "1", memory: 512Mi }
+
+  katonic-mcp-server:
+    enabled: true
+    port: 8017
+    replicas: 2
+    image: katonic/katonic-mcp-server
+    healthPath: "/health"
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+  ops-hub:
+    enabled: true
+    port: 8018
+    replicas: 1
+    image: katonic/ops-hub
+    healthPath: "/health"
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+  prompt-optimizer:
+    enabled: true
+    port: 8019
+    replicas: 1
+    image: katonic/prompt-optimizer
+    healthPath: "/health"
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { cpu: "2", memory: 2Gi }
+
+  autoscaler:
+    enabled: true
+    port: 8020
+    replicas: 1
+    image: katonic/autoscaler
+    healthPath: "/healthz"
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: "1", memory: 512Mi }
+
+  resource-manager:
+    enabled: true
+    port: 8021
+    replicas: 1
+    image: katonic/resource-manager
+    healthPath: "/v1/health"
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: "1", memory: 512Mi }
+
+  gpu-slicing:
+    enabled: true
+    port: 8000
+    replicas: 1
+    image: katonic/gpu-slicing
+    healthPath: "/health"
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+
+# =============================================================================
+# Dedicated Subcharts
+# =============================================================================
+# These have their own templates/ directories because they need resources
+# beyond Deployment + Service (ClusterRole, GPU tolerations, WebSocket config).
+# =============================================================================
+
+tenantManager:
+  enabled: true
+  replicas: 1
+  image: katonic/tenant-manager
+  port: 8000
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  config:
+    deploymentMode: "platform"
+    autoBootstrap: true
+    multiTenancy:
+      maxOrgs: 1
+      maxEnvironmentsPerOrg: 3
+      maxUsersPerOrg: 500
+
+modelDeployment:
+  enabled: true
+  replicas: 1
+  image: katonic/model-deployment-service
+  port: 8012
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  gpu:
+    enabled: false
+    type: "nvidia.com/gpu"
+    count: 0
+  modelCache:
+    enabled: false
+    storageClass: ""
+    size: 50Gi
+
+aceBff:
+  enabled: true
+  replicas: 2
+  image: katonic/ace-bff
+  port: 3002
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  websocket:
+    pingInterval: 25000
+    pingTimeout: 5000
+    maxPayload: 1048576
+
+# =============================================================================
+# Istio Gateway & VirtualService
+# =============================================================================
+gateway:
+  enabled: true
+  wildcardDomain: false
+  httpsRedirect: false
+  tls:
+    enabled: false
+    credentialName: "katonic-tls"

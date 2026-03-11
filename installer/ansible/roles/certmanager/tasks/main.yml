@@ -1,0 +1,31 @@
+# ============================================================================
+# cert-manager Role
+# ============================================================================
+
+- name: Check if cert-manager namespace exists
+  shell: kubectl get namespace cert-manager
+  register: cm_exists
+  failed_when: false
+  changed_when: false
+
+- name: Deploy cert-manager
+  shell: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+  when: cm_exists.rc != 0
+
+- name: Wait for cert-manager (4 min)
+  pause:
+    minutes: 4
+  when: cm_exists.rc != 0
+
+- name: Wait for cert-manager pods
+  shell: |
+    kubectl wait --for=condition=ready pod \
+    -l app.kubernetes.io/instance=cert-manager \
+    -n cert-manager \
+    --timeout=300s
+  retries: 5
+  delay: 15
+
+- name: Display cert-manager status
+  debug:
+    msg: "cert-manager is ready"

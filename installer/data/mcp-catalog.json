@@ -1,0 +1,66 @@
+[
+  {
+    "mcpName": "atlassian",
+    "dockerImage": "mcp/atlassian",
+    "category": "Project Management",
+    "description": "Jira and Confluence integration via MCP",
+    "tools": [{"name": "search_issues", "description": "Search Jira issues"}, {"name": "create_issue", "description": "Create Jira issue"}, {"name": "search_confluence", "description": "Search Confluence pages"}],
+    "inputFields": [{"name": "jira_url", "type": "text", "required": true, "placeholder": "Jira URL"}, {"name": "api_token", "type": "password", "required": true, "placeholder": "API Token"}]
+  },
+  {
+    "mcpName": "github",
+    "dockerImage": "mcp/github",
+    "category": "Developer Tools",
+    "description": "GitHub repos, issues, PRs, and actions",
+    "tools": [{"name": "search_repos", "description": "Search repositories"}, {"name": "create_issue", "description": "Create issue"}, {"name": "create_pr", "description": "Create pull request"}],
+    "inputFields": [{"name": "github_token", "type": "password", "required": true, "placeholder": "GitHub Token"}]
+  },
+  {
+    "mcpName": "slack",
+    "dockerImage": "mcp/slack",
+    "category": "Communication",
+    "description": "Slack messaging and channel management",
+    "tools": [{"name": "send_message", "description": "Send Slack message"}, {"name": "search_messages", "description": "Search messages"}, {"name": "list_channels", "description": "List channels"}],
+    "inputFields": [{"name": "slack_token", "type": "password", "required": true, "placeholder": "Slack Bot Token"}]
+  },
+  {
+    "mcpName": "postgres",
+    "dockerImage": "mcp/postgres",
+    "category": "Database",
+    "description": "PostgreSQL query and schema exploration",
+    "tools": [{"name": "query", "description": "Execute SQL query"}, {"name": "describe_table", "description": "Describe table schema"}, {"name": "list_tables", "description": "List all tables"}],
+    "inputFields": [{"name": "connection_string", "type": "password", "required": true, "placeholder": "PostgreSQL Connection String"}]
+  },
+  {
+    "mcpName": "brave-search",
+    "dockerImage": "mcp/brave-search",
+    "category": "Search",
+    "description": "Web search via Brave Search API",
+    "tools": [{"name": "web_search", "description": "Search the web"}, {"name": "local_search", "description": "Search local businesses"}],
+    "inputFields": [{"name": "api_key", "type": "password", "required": true, "placeholder": "Brave API Key"}]
+  },
+  {
+    "mcpName": "filesystem",
+    "dockerImage": "mcp/filesystem",
+    "category": "Storage",
+    "description": "Local filesystem read/write operations",
+    "tools": [{"name": "read_file", "description": "Read file contents"}, {"name": "write_file", "description": "Write file"}, {"name": "list_directory", "description": "List directory contents"}],
+    "inputFields": [{"name": "allowed_paths", "type": "text", "required": true, "placeholder": "Allowed Paths (comma-separated)"}]
+  },
+  {
+    "mcpName": "google-drive",
+    "dockerImage": "mcp/google-drive",
+    "category": "Storage",
+    "description": "Google Drive file management and search",
+    "tools": [{"name": "search_files", "description": "Search Drive files"}, {"name": "read_file", "description": "Read file content"}, {"name": "create_file", "description": "Create new file"}],
+    "inputFields": [{"name": "credentials_json", "type": "password", "required": true, "placeholder": "Service Account JSON"}]
+  },
+  {
+    "mcpName": "salesforce",
+    "dockerImage": "mcp/salesforce",
+    "category": "CRM",
+    "description": "Salesforce CRM data and operations",
+    "tools": [{"name": "query_records", "description": "SOQL query"}, {"name": "create_record", "description": "Create record"}, {"name": "update_record", "description": "Update record"}],
+    "inputFields": [{"name": "instance_url", "type": "text", "required": true, "placeholder": "Instance URL"}, {"name": "access_token", "type": "password", "required": true, "placeholder": "Access Token"}]
+  }
+]

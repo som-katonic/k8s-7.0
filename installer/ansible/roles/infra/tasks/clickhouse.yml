@@ -1,0 +1,131 @@
+# ============================================================================
+# Infra Role - ClickHouse (Analytics Database)
+# ============================================================================
+# Used by: observability, governance-proxy, guardrails-engine, ai-gateway
+# ============================================================================
+
+- name: Add ClickHouse Helm repo
+  shell: helm repo add bitnami https://charts.bitnami.com/bitnami && helm repo update
+  ignore_errors: true
+
+- name: Generate ClickHouse platform password
+  shell: openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 24
+  register: ch_password_gen
+  no_log: true
+
+- name: Set ClickHouse facts
+  set_fact:
+    clickhouse_host: "clickhouse.katonic-infra.svc.cluster.local"
+    clickhouse_port: "8123"
+    clickhouse_database: "platform"
+    clickhouse_user: "default"
+    clickhouse_password: "{{ ch_password_gen.stdout }}"
+  no_log: true
+
+- name: Deploy ClickHouse
+  shell: >
+    helm upgrade --install clickhouse bitnami/clickhouse
+    --namespace katonic-infra
+    --set auth.username=default
+    --set auth.password={{ clickhouse_password }}
+    --set shards=1
+    --set replicaCount={{ clickhouse_replicas | default(1) }}
+    --set persistence.size={{ clickhouse_storage_size | default('50Gi') }}
+    --set resources.requests.memory=1Gi
+    --set resources.requests.cpu=500m
+    --set resources.limits.memory=4Gi
+    --set resources.limits.cpu=2
+    --set zookeeper.enabled={{ 'true' if (clickhouse_replicas | default(1) | int) > 1 else 'false' }}
+    --wait --timeout 10m
+  no_log: true
+
+- name: Wait for ClickHouse ready
+  shell: >
+    kubectl wait --for=condition=ready pod
+    -l app.kubernetes.io/name=clickhouse
+    -n katonic-infra
+    --timeout=300s
+  retries: 3
+  delay: 30
+
+- name: Create platform database and tables
+  shell: |
+    kubectl run ch-init --rm -i --restart=Never \
+      --namespace katonic-infra \
+      --image=bitnami/clickhouse:latest \
+      -- clickhouse-client \
+      --host={{ clickhouse_host }} \
+      --user=default \
+      --password={{ clickhouse_password }} \
+      --multiquery \
+      --query="
+        CREATE DATABASE IF NOT EXISTS platform;
+
+        CREATE TABLE IF NOT EXISTS platform.llm_usage_events (
+          event_id UUID DEFAULT generateUUIDv4(),
+          tenant_id String DEFAULT 'default',
+          timestamp DateTime64(3) DEFAULT now64(),
+          model String,
+          provider String,
+          prompt_tokens UInt32 DEFAULT 0,
+          completion_tokens UInt32 DEFAULT 0,
+          total_cost Decimal64(8) DEFAULT 0,
+          user_id String DEFAULT '',
+          session_id String DEFAULT '',
+          latency_ms UInt32 DEFAULT 0,
+          status String DEFAULT 'success'
+        ) ENGINE = MergeTree()
+        ORDER BY (tenant_id, timestamp)
+        PARTITION BY toYYYYMM(timestamp);
+
+        CREATE TABLE IF NOT EXISTS platform.tool_usage_events (
+          event_id UUID DEFAULT generateUUIDv4(),
+          tenant_id String DEFAULT 'default',
+          timestamp DateTime64(3) DEFAULT now64(),
+          tool_name String,
+          mcp_server String DEFAULT '',
+          risk_level String DEFAULT 'low',
+          approved Bool DEFAULT true,
+          latency_ms UInt32 DEFAULT 0,
+          user_id String DEFAULT '',
+          session_id String DEFAULT ''
+        ) ENGINE = MergeTree()
+        ORDER BY (tenant_id, timestamp)
+        PARTITION BY toYYYYMM(timestamp);
+
+        CREATE TABLE IF NOT EXISTS platform.guardrail_events (
+          event_id UUID DEFAULT generateUUIDv4(),
+          tenant_id String DEFAULT 'default',
+          timestamp DateTime64(3) DEFAULT now64(),
+          rail_name String,
+          direction String DEFAULT 'input',
+          action String DEFAULT 'pass',
+          confidence Float32 DEFAULT 0,
+          user_id String DEFAULT '',
+          model String DEFAULT ''
+        ) ENGINE = MergeTree()
+        ORDER BY (tenant_id, timestamp)
+        PARTITION BY toYYYYMM(timestamp);
+
+        CREATE TABLE IF NOT EXISTS platform.governance_tool_events (
+          event_id UUID DEFAULT generateUUIDv4(),
+          tenant_id String DEFAULT 'default',
+          timestamp DateTime64(3) DEFAULT now64(),
+          action_type String,
+          actor_email String DEFAULT '',
+          resource_type String DEFAULT '',
+          resource_id String DEFAULT '',
+          details String DEFAULT '',
+          ip_address String DEFAULT ''
+        ) ENGINE = MergeTree()
+        ORDER BY (tenant_id, timestamp)
+        PARTITION BY toYYYYMM(timestamp);
+      "
+  no_log: true
+  retries: 3
+  delay: 10
+  ignore_errors: true
+
+- name: Display ClickHouse status
+  debug:
+    msg: "ClickHouse deployed at {{ clickhouse_host }}:{{ clickhouse_port }}/{{ clickhouse_database }}"

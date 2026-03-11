@@ -1,0 +1,28 @@
+apiVersion: v2
+name: katonic-platform
+description: Katonic AI Platform - Umbrella Helm Chart
+type: application
+version: 7.0.0
+appVersion: "7.0.0"
+keywords:
+  - ai
+  - agents
+  - mlops
+  - multi-tenant
+  - enterprise-ai
+maintainers:
+  - name: Katonic DevOps
+    email: devops@katonic.ai
+dependencies:
+  - name: tenant-manager
+    version: "7.0.0"
+    repository: "file://charts/tenant-manager"
+    condition: tenantManager.enabled
+  - name: model-deployment
+    version: "7.0.0"
+    repository: "file://charts/model-deployment"
+    condition: modelDeployment.enabled
+  - name: ace-bff
+    version: "7.0.0"
+    repository: "file://charts/ace-bff"
+    condition: aceBff.enabled

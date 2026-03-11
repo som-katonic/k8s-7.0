@@ -1,0 +1,28 @@
+# Auto-generated from katonic.yml
+gcp_project_id         = "{{ gcp_project_id }}"
+gcp_region             = "{{ gcp_region }}"
+cluster_name           = "{{ cluster_name }}"
+private_cluster        = {{ private_cluster | default(False) | lower }}
+
+platform_instance_type = "{{ platform_nodes.instance_type }}"
+platform_min_count     = {{ platform_nodes.min_count }}
+platform_max_count     = {{ platform_nodes.max_count }}
+platform_disk_size     = {{ platform_nodes.os_disk_size }}
+
+compute_instance_type  = "{{ compute_nodes.instance_type }}"
+compute_min_count      = {{ compute_nodes.min_count }}
+compute_max_count      = {{ compute_nodes.max_count }}
+compute_disk_size      = {{ compute_nodes.os_disk_size }}
+
+vectordb_instance_type = "{{ vectordb_nodes.instance_type }}"
+vectordb_min_count     = {{ vectordb_nodes.min_count }}
+vectordb_max_count     = {{ vectordb_nodes.max_count }}
+vectordb_disk_size     = {{ vectordb_nodes.os_disk_size }}
+
+gpu_enabled            = {{ gpu_enabled | default(False) | lower }}
+{% if gpu_enabled | default(False) | bool %}
+gpu_instance_type      = "{{ gpu_nodes.instance_type }}"
+gpu_min_count          = {{ gpu_nodes.min_count }}
+gpu_max_count          = {{ gpu_nodes.max_count }}
+gpu_disk_size          = {{ gpu_nodes.os_disk_size }}
+{% endif %}

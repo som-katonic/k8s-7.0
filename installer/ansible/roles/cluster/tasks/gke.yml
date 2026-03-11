@@ -1,0 +1,45 @@
+# ============================================================================
+# Cluster Role - GKE Creation (GCP)
+# ============================================================================
+
+- name: Set GKE facts
+  set_fact:
+    terraform_dir: "{{ installer_root }}/terraform/gcp"
+
+- name: Initialize Terraform for GKE
+  shell: |
+    cd {{ terraform_dir }}
+    terraform init
+  args:
+    creates: "{{ terraform_dir }}/.terraform"
+
+- name: Generate Terraform variables
+  template:
+    src: gke-tfvars.j2
+    dest: "{{ terraform_dir }}/terraform.tfvars"
+
+- name: Create GKE cluster (this takes 10-20 minutes)
+  shell: |
+    cd {{ terraform_dir }}
+    terraform plan -out=tfplan.out
+    terraform apply -auto-approve tfplan.out 2>&1 | tee /tmp/terraform_gke.log
+  register: gke_create
+  async: 1800
+  poll: 30
+
+- name: Get GKE credentials
+  shell: >
+    gcloud container clusters get-credentials {{ cluster_name }}
+    --region {{ gcp_region }}
+    --project {{ gcp_project_id }}
+
+- name: Verify GKE connectivity
+  shell: kubectl get nodes --no-headers
+  register: gke_nodes
+  retries: 10
+  delay: 30
+  until: gke_nodes.rc == 0
+
+- name: Display GKE cluster info
+  debug:
+    msg: "GKE cluster {{ cluster_name }} ready with {{ gke_nodes.stdout_lines | length }} nodes"

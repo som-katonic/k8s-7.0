@@ -1,0 +1,246 @@
+suite: katonic-platform chart
+templates:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - platform-secrets.yaml
+  - gateway.yaml
+
+# ---------------------------------------------------------------------------
+# Namespace
+# ---------------------------------------------------------------------------
+tests:
+  - it: renders namespace with default name
+    template: namespace.yaml
+    asserts:
+      - isKind:
+          of: Namespace
+      - equal:
+          path: metadata.name
+          value: katonic-system
+      - isNotNullOrEmpty:
+          path: metadata.labels["app.kubernetes.io/managed-by"]
+
+  - it: renders namespace with custom global.namespace override
+    template: namespace.yaml
+    set:
+      global.namespace: my-katonic
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-katonic
+
+  - it: namespace has istio-injection label
+    template: namespace.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["istio-injection"]
+          value: enabled
+
+---
+suite: katonic-platform deployments
+templates:
+  - deployment.yaml
+
+tests:
+  - it: renders Deployment for enabled admin-api service
+    set:
+      services.admin-api.enabled: true
+      services.admin-api.port: 8004
+      services.admin-api.replicas: 2
+      services.admin-api.image: katonic/admin-api
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: admin-api
+
+  - it: admin-api deployment has correct replica count
+    set:
+      services.admin-api.enabled: true
+      services.admin-api.port: 8004
+      services.admin-api.replicas: 2
+      services.admin-api.image: katonic/admin-api
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: deployment uses global imageRegistry and imageTag
+    set:
+      global.imageRegistry: myregistry.io
+      global.imageTag: "8.0.0"
+      services.admin-api.enabled: true
+      services.admin-api.port: 8004
+      services.admin-api.replicas: 1
+      services.admin-api.image: katonic/admin-api
+    documentIndex: 0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "myregistry.io/katonic/admin-api:8.0.0"
+
+  - it: does not render Deployment for disabled service
+    set:
+      services.admin-api.enabled: false
+      services.admin-api.port: 8004
+      services.admin-api.image: katonic/admin-api
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: deployment has RollingUpdate strategy with zero downtime settings
+    set:
+      services.admin-api.enabled: true
+      services.admin-api.port: 8004
+      services.admin-api.replicas: 1
+      services.admin-api.image: katonic/admin-api
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+
+  - it: deployment namespace matches global.namespace
+    set:
+      global.namespace: katonic-prod
+      services.admin-api.enabled: true
+      services.admin-api.port: 8004
+      services.admin-api.replicas: 1
+      services.admin-api.image: katonic/admin-api
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: katonic-prod
+
+---
+suite: katonic-platform services
+templates:
+  - service.yaml
+
+tests:
+  - it: renders Service for enabled service
+    set:
+      services.admin-api.enabled: true
+      services.admin-api.port: 8004
+      services.admin-api.replicas: 1
+      services.admin-api.image: katonic/admin-api
+    asserts:
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: admin-api
+
+  - it: service has correct port
+    set:
+      services.admin-api.enabled: true
+      services.admin-api.port: 8004
+      services.admin-api.replicas: 1
+      services.admin-api.image: katonic/admin-api
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 8004
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: does not render Service for disabled service
+    set:
+      services.admin-api.enabled: false
+      services.admin-api.port: 8004
+      services.admin-api.image: katonic/admin-api
+    asserts:
+      - hasDocuments:
+          count: 0
+
+---
+suite: katonic-platform secrets
+templates:
+  - platform-secrets.yaml
+
+tests:
+  - it: renders platform-secrets Secret
+    asserts:
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: platform-secrets
+
+  - it: renders db credentials secret when no existingSecret set
+    set:
+      global.postgresql.existingSecret: ""
+      global.postgresql.password: "my-pg-password"
+    asserts:
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: platform-db-credentials
+
+  - it: skips db credentials secret when existingSecret is configured
+    set:
+      global.postgresql.existingSecret: "my-external-secret"
+    asserts:
+      - notContainsDocument:
+          kind: Secret
+          name: platform-db-credentials
+
+  - it: renders redis credentials secret when no existingSecret set
+    set:
+      global.redis.existingSecret: ""
+      global.redis.password: "redis-pw"
+    asserts:
+      - containsDocument:
+          kind: Secret
+          name: platform-redis-credentials
+
+---
+suite: katonic-platform gateway
+templates:
+  - gateway.yaml
+
+tests:
+  - it: renders Gateway when enabled
+    set:
+      gateway.enabled: true
+      global.domain: ai.example.com
+    asserts:
+      - isKind:
+          of: Gateway
+      - equal:
+          path: metadata.name
+          value: katonic-gateway
+
+  - it: gateway uses global.domain for host
+    set:
+      gateway.enabled: true
+      global.domain: platform.mycompany.com
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.servers[0].hosts
+          content: "platform.mycompany.com"
+
+  - it: gateway does not render when disabled
+    set:
+      gateway.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: gateway includes wildcard host when wildcardDomain enabled
+    set:
+      gateway.enabled: true
+      gateway.wildcardDomain: true
+      global.domain: ai.example.com
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.servers[0].hosts
+          content: "*.ai.example.com"

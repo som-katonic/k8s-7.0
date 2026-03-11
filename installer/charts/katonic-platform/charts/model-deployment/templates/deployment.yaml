@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-deployment
+  namespace: {{ include "katonic.namespace" $ }}
+  labels:
+    app.kubernetes.io/name: model-deployment
+    {{- include "katonic.labels" $ | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: model-deployment
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: model-deployment
+    spec:
+      {{- with $.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: model-deployment
+          image: "{{ include "katonic.imageRegistry" $ }}/{{ .Values.image }}:{{ include "katonic.imageTag" $ }}"
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+          envFrom:
+            - configMapRef:
+                name: platform-config
+            - secretRef:
+                name: platform-secrets
+                optional: true
+          env:
+            - name: SERVICE_NAME
+              value: "model-deployment"
+            - name: PORT
+              value: {{ .Values.port | quote }}
+            - name: GPU_ENABLED
+              value: {{ .Values.gpu.enabled | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+            {{- if .Values.gpu.enabled }}
+            limits:
+              {{ .Values.gpu.type }}: {{ .Values.gpu.count | default 1 }}
+            {{- end }}
+          {{- if .Values.modelCache.enabled }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      {{- if .Values.gpu.enabled }}
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      {{- end }}
+      {{- if .Values.modelCache.enabled }}
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache-pvc
+      {{- end }}
+---
+{{- if .Values.modelCache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache-pvc
+  namespace: {{ include "katonic.namespace" $ }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.modelCache.storageClass }}
+  storageClassName: {{ .Values.modelCache.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.modelCache.size }}
+{{- end }}

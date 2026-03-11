@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ace-bff
+  namespace: {{ include "katonic.namespace" $ }}
+  labels:
+    app.kubernetes.io/name: ace-bff
+  annotations:
+    # Ensure Istio/ingress handles WebSocket upgrade headers
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.port }}
+      targetPort: http
+      name: http
+  selector:
+    app.kubernetes.io/name: ace-bff

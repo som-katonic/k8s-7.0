@@ -1,0 +1,21 @@
+# ============================================================================
+# Infra Role - Cloud Object Storage (Alibaba OSS / SCCC - S3-compatible)
+# ============================================================================
+
+- name: Set OSS region
+  set_fact:
+    oss_region: "{{ 'me-riyadh' if sccc_mode | default(false) | bool else alibaba_region | default('cn-hangzhou') }}"
+
+- name: Set Alibaba OSS facts
+  set_fact:
+    object_storage_type: "s3"
+    object_storage_endpoint: "https://oss-{{ oss_region }}.aliyuncs.com"
+    object_storage_region: "{{ oss_region }}"
+    object_storage_bucket_prefix: "{{ oss_bucket_prefix | default('katonic') }}"
+    object_storage_access_key: "{{ alibaba_access_key | default('') }}"
+    object_storage_secret_key: "{{ alibaba_secret_key | default('') }}"
+  no_log: true
+
+- name: Display OSS configuration
+  debug:
+    msg: "Object storage: {{ 'SCCC' if sccc_mode | default(false) | bool else 'Alibaba' }} OSS (S3-compatible, region: {{ oss_region }})"

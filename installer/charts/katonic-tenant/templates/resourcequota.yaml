@@ -1,0 +1,22 @@
+{{- if .Values.resourceQuota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-quota
+  namespace: {{ include "tenant.namespace" . }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  hard:
+    requests.cpu: {{ .Values.resourceQuota.cpu | quote }}
+    requests.memory: {{ .Values.resourceQuota.memory | quote }}
+    limits.cpu: {{ .Values.resourceQuota.cpu | quote }}
+    limits.memory: {{ .Values.resourceQuota.memory | quote }}
+    pods: {{ .Values.resourceQuota.pods | quote }}
+    services: {{ .Values.resourceQuota.services | quote }}
+    persistentvolumeclaims: {{ .Values.resourceQuota.persistentvolumeclaims | quote }}
+    {{- if and .Values.resourceQuota.gpu (ne .Values.resourceQuota.gpu "0") }}
+    requests.nvidia.com/gpu: {{ .Values.resourceQuota.gpu | quote }}
+    limits.nvidia.com/gpu: {{ .Values.resourceQuota.gpu | quote }}
+    {{- end }}
+{{- end }}

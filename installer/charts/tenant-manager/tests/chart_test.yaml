@@ -1,0 +1,173 @@
+suite: tenant-manager deployment
+templates:
+  - deployment.yaml
+
+tests:
+  - it: renders Deployment
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: tenant-manager
+
+  - it: default replica count is 1
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: replica count can be overridden
+    set:
+      replicaCount: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+
+  - it: renders correct image reference
+    set:
+      image.registry: registry.katonic.ai
+      image.repository: tenant-manager
+      image.tag: "7.0.0"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.katonic.ai/tenant-manager:7.0.0
+
+  - it: custom image tag is reflected in deployment
+    set:
+      image.registry: myregistry.io
+      image.repository: katonic/tenant-manager
+      image.tag: "8.0.0-rc1"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: myregistry.io/katonic/tenant-manager:8.0.0-rc1
+
+  - it: container exposes port 8015
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            containerPort: 8015
+            name: http
+            protocol: TCP
+
+  - it: deployment version label matches config.platformVersion
+    set:
+      config.platformVersion: "7.1.0"
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: "7.1.0"
+
+  - it: GPU enabled flag is passed as env var when gpuEnabled is true
+    set:
+      config.gpuEnabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TM_GPU_ENABLED
+            value: "true"
+
+  - it: deployment references the correct ServiceAccount
+    set:
+      serviceAccount.name: tenant-manager-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: tenant-manager-sa
+
+---
+suite: tenant-manager service
+templates:
+  - service.yaml
+
+tests:
+  - it: renders Service of default type ClusterIP
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: service port defaults to 8000
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 8000
+
+  - it: service targetPort is always 8015
+    asserts:
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 8015
+
+  - it: service selector matches deployment labels
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: tenant-manager
+
+  - it: service type can be overridden to LoadBalancer
+    set:
+      service.type: LoadBalancer
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+
+---
+suite: tenant-manager RBAC
+templates:
+  - rbac.yaml
+
+tests:
+  - it: renders ClusterRole when rbac.create is true
+    set:
+      rbac.create: true
+    asserts:
+      - containsDocument:
+          kind: ClusterRole
+          name: tenant-manager
+
+  - it: ClusterRole grants namespace management permissions
+    set:
+      rbac.create: true
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["namespaces"]
+            verbs: ["get", "list", "watch", "create", "update", "delete"]
+
+  - it: ClusterRole grants pod/service/secret permissions
+    set:
+      rbac.create: true
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods", "services", "configmaps", "secrets", "persistentvolumeclaims"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - it: renders ClusterRoleBinding when rbac.create is true
+    set:
+      rbac.create: true
+    asserts:
+      - containsDocument:
+          kind: ClusterRoleBinding
+
+  - it: does not render RBAC resources when rbac.create is false
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0

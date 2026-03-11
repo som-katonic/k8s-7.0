@@ -1,0 +1,10 @@
+apiVersion: v2
+name: katonic-tenant
+description: Per-tenant resources deployed into each org namespace
+type: application
+version: 7.0.0
+appVersion: "7.0.0"
+keywords:
+  - multi-tenant
+  - per-org
+  - namespace

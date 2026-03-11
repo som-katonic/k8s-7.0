@@ -1,0 +1,93 @@
+# ===========================================================================
+# Infrastructure role: Deploy all shared infrastructure components
+#
+# Order matters: PostgreSQL first (other components depend on it),
+# then Redis, then Milvus, MinIO, and Keycloak.
+#
+# Handles both in-cluster and managed database modes.
+# ===========================================================================
+---
+# ---- Namespaces (must exist before anything deploys) ---------------------
+- name: "[infra] Create katonic-infra namespace"
+  ansible.builtin.shell: |
+    kubectl create namespace katonic-infra --dry-run=client -o yaml | kubectl apply -f -
+
+- name: "[infra] Create katonic-keycloak namespace"
+  ansible.builtin.shell: |
+    kubectl create namespace katonic-keycloak --dry-run=client -o yaml | kubectl apply -f -
+
+# ---- PostgreSQL ----------------------------------------------------------
+- name: "[infra] Deploy in-cluster PostgreSQL"
+  ansible.builtin.include_tasks: postgresql.yml
+  when: database_mode | default('in_cluster') == 'in_cluster'
+
+- name: "[infra] Configure managed database (AWS RDS)"
+  ansible.builtin.include_tasks: managed-db-aws.yml
+  when:
+    - database_mode | default('in_cluster') == 'managed'
+    - cloud_provider == 'aws'
+
+- name: "[infra] Configure managed database (Azure)"
+  ansible.builtin.include_tasks: managed-db-azure.yml
+  when:
+    - database_mode | default('in_cluster') == 'managed'
+    - cloud_provider == 'azure'
+
+- name: "[infra] Configure managed database (GCP Cloud SQL)"
+  ansible.builtin.include_tasks: managed-db-gcp.yml
+  when:
+    - database_mode | default('in_cluster') == 'managed'
+    - cloud_provider == 'gcp'
+
+- name: "[infra] Configure managed database (OCI)"
+  ansible.builtin.include_tasks: managed-db-oci.yml
+  when:
+    - database_mode | default('in_cluster') == 'managed'
+    - cloud_provider == 'oci'
+
+- name: "[infra] Configure managed database (Alibaba ApsaraDB)"
+  ansible.builtin.include_tasks: managed-db-alibaba.yml
+  when:
+    - database_mode | default('in_cluster') == 'managed'
+    - cloud_provider == 'alibaba'
+
+# ---- Redis ---------------------------------------------------------------
+- name: "[infra] Deploy Redis"
+  ansible.builtin.include_tasks: redis.yml
+
+# ---- Object Storage ------------------------------------------------------
+- name: "[infra] Deploy MinIO (in-cluster object storage)"
+  ansible.builtin.include_tasks: minio.yml
+  when: object_storage | default('minio') == 'minio'
+
+- name: "[infra] Configure S3"
+  ansible.builtin.include_tasks: object-storage-aws.yml
+  when: object_storage | default('minio') == 's3'
+
+- name: "[infra] Configure Azure Blob Storage"
+  ansible.builtin.include_tasks: object-storage-azure.yml
+  when: object_storage | default('minio') == 'azure_blob'
+
+- name: "[infra] Configure GCS"
+  ansible.builtin.include_tasks: object-storage-gcp.yml
+  when: object_storage | default('minio') == 'gcs'
+
+- name: "[infra] Configure OCI Object Storage"
+  ansible.builtin.include_tasks: object-storage-oci.yml
+  when: object_storage | default('minio') == 'oci_os'
+
+- name: "[infra] Configure Alibaba OSS"
+  ansible.builtin.include_tasks: object-storage-alibaba.yml
+  when: object_storage | default('minio') == 'oss'
+
+# ---- Vector Database -----------------------------------------------------
+- name: "[infra] Deploy Milvus"
+  ansible.builtin.include_tasks: milvus.yml
+
+# ---- Authentication ------------------------------------------------------
+- name: "[infra] Deploy Keycloak"
+  ansible.builtin.include_tasks: keycloak.yml
+
+# ---- Temporal (workflow engine for knowledge-engine) ---------------------
+- name: "[infra] Deploy Temporal"
+  ansible.builtin.include_tasks: temporal.yml

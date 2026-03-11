@@ -1,0 +1,334 @@
+# ============================================================================
+# Katonic AI Platform v7.0 - Main Ansible Playbook
+# ============================================================================
+# Orchestrates infrastructure provisioning and platform deployment.
+# Phase 4 deploys shared infra (PG, Redis, Milvus, ClickHouse, MongoDB).
+# Phase 6 deploys the umbrella Helm chart (all platform services).
+# ============================================================================
+
+- name: Katonic AI Platform v7.0 Installation
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    installer_root: /root
+    effective_cloud: "{{ deploy_on }}"
+    sccc_mode: "{{ 'true' if deploy_on == 'SCCC' else 'false' }}"
+    # Normalize SCCC to Alibaba for task routing
+    cloud_provider: "{{ 'Alibaba' if deploy_on == 'SCCC' else deploy_on }}"
+    # Determine if cloud or on-prem
+    is_cloud: "{{ deploy_on in ['AWS', 'Azure', 'GCP', 'OCI', 'Alibaba', 'SCCC'] }}"
+    is_onprem: "{{ deploy_on == 'On-Premise' }}"
+    # Air-gap overrides
+    effective_db_mode: "{{ 'in-cluster' if air_gap | default(False) else database_mode | default('in-cluster') }}"
+    effective_storage_mode: "{{ 'minio' if air_gap | default(False) else object_storage_mode | default('auto') }}"
+    # Resolve auto object storage
+    resolved_object_storage: >-
+      {%- if effective_storage_mode == 'minio' -%}minio
+      {%- elif effective_storage_mode == 'auto' -%}
+        {%- if deploy_on == 'AWS' -%}s3
+        {%- elif deploy_on == 'Azure' -%}azure-blob
+        {%- elif deploy_on == 'GCP' -%}gcs
+        {%- elif deploy_on == 'OCI' -%}oci-os
+        {%- elif deploy_on in ['Alibaba', 'SCCC'] -%}oss
+        {%- else -%}minio
+        {%- endif -%}
+      {%- else -%}minio
+      {%- endif -%}
+    # Platform domain (used by tenant-manager, TLS, DNS, status)
+    platform_domain: >-
+      {%- if use_custom_domain | default(False) | bool -%}{{ custom_domain_name }}
+      {%- else -%}{{ katonic_domain_prefix | default('platform') }}.katonic.ai
+      {%- endif -%}
+
+  tasks:
+    # ==================================================================
+    # Phase 1: Cluster Provisioning
+    # ==================================================================
+    - name: Display installation summary
+      debug:
+        msg: |
+          ============================================
+          Katonic AI Platform v{{ platform_version }}
+          ============================================
+          Cloud:           {{ deploy_on }}
+          Cluster:         {{ cluster_name }}
+          Create cluster:  {{ create_k8s_cluster }}
+          Database:        {{ effective_db_mode }}
+          Object storage:  {{ resolved_object_storage }}
+          Milvus:          {{ milvus_mode | default('standalone') }}
+          GPU:             {{ gpu_enabled | default(False) }}
+          Air-gap:         {{ air_gap | default(False) }}
+          Admin:           {{ admin_email }}
+          ============================================
+      tags: always
+
+    # -- Create K8s cluster (cloud only) --
+    - name: Create EKS cluster
+      include_role:
+        name: cluster
+        tasks_from: eks.yml
+      when: cloud_provider == 'AWS' and create_k8s_cluster | bool
+      tags: cluster
+
+    - name: Create AKS cluster
+      include_role:
+        name: cluster
+        tasks_from: aks.yml
+      when: cloud_provider == 'Azure' and create_k8s_cluster | bool
+      tags: cluster
+
+    - name: Create GKE cluster
+      include_role:
+        name: cluster
+        tasks_from: gke.yml
+      when: cloud_provider == 'GCP' and create_k8s_cluster | bool
+      tags: cluster
+
+    - name: Create OKE cluster
+      include_role:
+        name: cluster
+        tasks_from: oke.yml
+      when: cloud_provider == 'OCI' and create_k8s_cluster | bool
+      tags: cluster
+
+    - name: Create ACK cluster
+      include_role:
+        name: cluster
+        tasks_from: ack.yml
+      when: cloud_provider == 'Alibaba' and create_k8s_cluster | bool
+      tags: cluster
+
+    # -- Connect to existing cluster --
+    - name: Connect to existing cluster
+      include_role:
+        name: cluster
+        tasks_from: existing.yml
+      when: not (create_k8s_cluster | bool)
+      tags: cluster
+
+    # -- Post-cluster: verify connectivity --
+    - name: Verify cluster connectivity
+      include_role:
+        name: cluster
+        tasks_from: verify.yml
+      tags: cluster
+
+    # ==================================================================
+    # Phase 2: Cluster Configuration
+    # ==================================================================
+
+    - name: Configure storage classes
+      include_role:
+        name: storage
+      tags: storage
+
+    - name: Enable GPU nodes
+      include_role:
+        name: gpu
+      when: gpu_enabled | default(False) | bool
+      tags: gpu
+
+    # ==================================================================
+    # Phase 3: Core Infrastructure
+    # ==================================================================
+
+    # -- MetalLB for on-prem LoadBalancer (must be before Istio) --
+    - name: Deploy MetalLB for on-prem LoadBalancer
+      shell: |
+        # Install MetalLB
+        kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.5/config/manifests/metallb-native.yaml
+        # Wait for controller
+        kubectl -n metallb-system wait --for=condition=ready pod -l app=metallb,component=controller --timeout=120s
+        sleep 5
+        # Configure IP address pool
+        cat <<EOF | kubectl apply -f -
+        apiVersion: metallb.io/v1beta1
+        kind: IPAddressPool
+        metadata:
+          name: katonic-pool
+          namespace: metallb-system
+        spec:
+          addresses:
+          - {{ metallb_address_pool | default('10.0.0.200-10.0.0.210') }}
+        ---
+        apiVersion: metallb.io/v1beta1
+        kind: L2Advertisement
+        metadata:
+          name: katonic-l2
+          namespace: metallb-system
+        spec:
+          ipAddressPools:
+          - katonic-pool
+        EOF
+      when: is_onprem | bool and (skip_metallb | default(False) | bool) == False
+      tags: metallb
+
+    - name: Deploy cert-manager
+      include_role:
+        name: certmanager
+      tags: certmanager
+
+    - name: Deploy Istio
+      include_role:
+        name: istio
+      tags: istio
+
+    # ==================================================================
+    # Phase 4: Shared Services (individual Helm releases)
+    # ==================================================================
+
+    - name: Create katonic-infra namespace
+      shell: kubectl create namespace katonic-infra --dry-run=client -o yaml | kubectl apply -f -
+      tags: infra
+
+    - name: Deploy PostgreSQL (in-cluster)
+      include_role:
+        name: infra
+        tasks_from: postgresql.yml
+      when: effective_db_mode == 'in-cluster'
+      tags: infra
+
+    - name: Provision managed database
+      include_role:
+        name: infra
+        tasks_from: "managed-db-{{ cloud_provider | lower }}.yml"
+      when: effective_db_mode == 'managed' and is_cloud | bool
+      tags: infra
+
+    - name: Deploy Keycloak
+      include_role:
+        name: infra
+        tasks_from: keycloak.yml
+      tags: infra
+
+    - name: Deploy Redis
+      include_role:
+        name: infra
+        tasks_from: redis.yml
+      tags: infra
+
+    - name: Deploy Milvus
+      include_role:
+        name: infra
+        tasks_from: milvus.yml
+      tags: infra
+
+    - name: Deploy MinIO
+      include_role:
+        name: infra
+        tasks_from: minio.yml
+      when: resolved_object_storage | trim == 'minio'
+      tags: infra
+
+    - name: Configure cloud object storage
+      include_role:
+        name: infra
+        tasks_from: "object-storage-{{ cloud_provider | lower }}.yml"
+      when: resolved_object_storage | trim != 'minio'
+      tags: infra
+
+    - name: Deploy ClickHouse
+      include_role:
+        name: infra
+        tasks_from: clickhouse.yml
+      tags: infra
+
+    - name: Deploy MongoDB
+      include_role:
+        name: infra
+        tasks_from: mongodb.yml
+      tags: infra
+
+    - name: Deploy MLflow (model registry + experiment tracking)
+      include_role:
+        name: infra
+        tasks_from: mlflow.yml
+      tags: infra,mlflow
+
+    # ==================================================================
+    # Phase 4b: Kubernetes Operators for per-org database isolation
+    # ==================================================================
+    # Operators must be installed before any org is provisioned.
+    # They run cluster-wide and watch for CRD objects in any namespace.
+    # ==================================================================
+
+    - name: Install database operators (CloudNativePG, MongoDB Community, Milvus)
+      include_role:
+        name: operators
+      tags: operators
+
+    # ==================================================================
+    # Phase 5: Monitoring
+    # ==================================================================
+
+    - name: Deploy monitoring stack
+      include_role:
+        name: monitoring
+      when: enable_monitoring | default(True) | bool
+      tags: monitoring
+
+    # ==================================================================
+    # Phase 6: Platform Services (Umbrella Helm Chart)
+    # ==================================================================
+    # Deploys all services: generic (admin-api, observability, etc.),
+    # subcharts (tenant-manager, model-deployment, ace-bff), and
+    # Istio routing (Gateway + VirtualService).
+    # ==================================================================
+
+    - name: Deploy platform services (Helm umbrella chart)
+      include_role:
+        name: platform
+      tags: platform
+
+    - name: Deploy backup operator (Velero)
+      include_role:
+        name: backup
+      when: backup_enabled | default(false) | bool
+      tags: backup
+
+    - name: Apply network policies
+      include_role:
+        name: networkpolicy
+      when: networkpolicy_enabled | default(false) | bool
+      tags: networkpolicy
+
+    # ==================================================================
+    # Phase 7: DNS & TLS
+    # ==================================================================
+
+    - name: Configure DNS
+      include_role:
+        name: dns
+      when: is_cloud | bool
+      tags: dns
+
+    - name: Configure TLS certificates
+      include_role:
+        name: tls
+      tags: tls
+
+    # ==================================================================
+    # Phase 8: Status
+    # ==================================================================
+
+    - name: Print installation status
+      include_role:
+        name: status
+      tags: status
+
+    # ==================================================================
+    # Phase 9: Post-Install Validation
+    # ==================================================================
+
+    - name: Run post-install validation
+      shell: bash {{ installer_root }}/scripts/post-check.sh
+      register: postcheck_result
+      ignore_errors: true
+      tags: postcheck
+
+    - name: Display post-check results
+      debug:
+        msg: "{{ postcheck_result.stdout_lines | default(['Post-check not available']) }}"
+      tags: postcheck

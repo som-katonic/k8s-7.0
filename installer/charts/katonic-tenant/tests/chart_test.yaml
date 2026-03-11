@@ -1,0 +1,207 @@
+suite: katonic-tenant namespace
+templates:
+  - namespace.yaml
+
+tests:
+  - it: generates namespace from orgSlug and environment
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+    asserts:
+      - isKind:
+          of: Namespace
+      - equal:
+          path: metadata.name
+          value: tenant-acme-prod
+
+  - it: uses explicitly set namespace when provided
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+      tenant.namespace: custom-ns
+    asserts:
+      - equal:
+          path: metadata.name
+          value: custom-ns
+
+  - it: dev environment gets its own namespace
+    set:
+      tenant.orgSlug: beta-corp
+      tenant.orgId: uuid-002
+      tenant.environment: dev
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-beta-corp-dev
+
+  - it: namespace has tenant labels
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+    asserts:
+      - equal:
+          path: metadata.labels["katonic.ai/tenant"]
+          value: "true"
+      - equal:
+          path: metadata.labels["katonic.ai/org-slug"]
+          value: acme
+      - equal:
+          path: metadata.labels["katonic.ai/environment"]
+          value: prod
+
+  - it: namespace has istio-injection label
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+    asserts:
+      - equal:
+          path: metadata.labels["istio-injection"]
+          value: enabled
+
+---
+suite: katonic-tenant resource quota
+templates:
+  - resourcequota.yaml
+
+tests:
+  - it: renders ResourceQuota when enabled
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+      resourceQuota.enabled: true
+      resourceQuota.cpu: "16"
+      resourceQuota.memory: 32Gi
+      resourceQuota.pods: "50"
+      resourceQuota.services: "20"
+      resourceQuota.persistentvolumeclaims: "10"
+    asserts:
+      - isKind:
+          of: ResourceQuota
+      - equal:
+          path: metadata.name
+          value: tenant-quota
+      - equal:
+          path: spec.hard["requests.cpu"]
+          value: "16"
+      - equal:
+          path: spec.hard["requests.memory"]
+          value: 32Gi
+      - equal:
+          path: spec.hard.pods
+          value: "50"
+
+  - it: does not render GPU quota when gpu is zero
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+      resourceQuota.enabled: true
+      resourceQuota.cpu: "8"
+      resourceQuota.memory: 16Gi
+      resourceQuota.pods: "20"
+      resourceQuota.services: "10"
+      resourceQuota.persistentvolumeclaims: "5"
+      resourceQuota.gpu: "0"
+    documentIndex: 0
+    asserts:
+      - isNullOrEmpty:
+          path: spec.hard["requests.nvidia.com/gpu"]
+
+  - it: renders GPU quota when gpu allocation is set
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+      resourceQuota.enabled: true
+      resourceQuota.cpu: "32"
+      resourceQuota.memory: 64Gi
+      resourceQuota.pods: "100"
+      resourceQuota.services: "40"
+      resourceQuota.persistentvolumeclaims: "20"
+      resourceQuota.gpu: "4"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.hard["requests.nvidia.com/gpu"]
+          value: "4"
+      - equal:
+          path: spec.hard["limits.nvidia.com/gpu"]
+          value: "4"
+
+  - it: does not render ResourceQuota when disabled
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+      resourceQuota.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+---
+suite: katonic-tenant network policy
+templates:
+  - networkpolicy.yaml
+
+tests:
+  - it: renders default-deny-ingress policy when enabled
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+      networkPolicy.enabled: true
+    asserts:
+      - containsDocument:
+          kind: NetworkPolicy
+          name: default-deny-ingress
+
+  - it: renders allow-from-platform policy when enabled
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+      networkPolicy.enabled: true
+    asserts:
+      - containsDocument:
+          kind: NetworkPolicy
+          name: allow-from-platform
+
+  - it: does not render NetworkPolicy when disabled
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+---
+suite: katonic-tenant serviceaccount
+templates:
+  - serviceaccount.yaml
+
+tests:
+  - it: renders ServiceAccount for tenant
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+    asserts:
+      - isKind:
+          of: ServiceAccount
+
+  - it: ServiceAccount is in correct namespace
+    set:
+      tenant.orgSlug: acme
+      tenant.orgId: uuid-001
+      tenant.environment: prod
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: tenant-acme-prod

@@ -1,0 +1,9 @@
+{
+  "name": "katonic-installer",
+  "private": true,
+  "scripts": {
+    "test": "cd tests && npm test",
+    "test:seed": "cd tests && npm run test:seed",
+    "test:build": "cd tests && npm run test:build"
+  }
+}

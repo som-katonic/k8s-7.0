@@ -1,0 +1,69 @@
+# ============================================================================
+# Infra Role - Milvus (Standalone or Distributed)
+# ============================================================================
+
+- name: Add Milvus Helm repo
+  shell: helm repo add milvus https://zilliztech.github.io/milvus-helm/ && helm repo update
+  ignore_errors: true
+
+- name: Deploy Milvus Standalone
+  shell: >
+    helm upgrade --install milvus milvus/milvus
+    --namespace katonic-infra
+    --set cluster.enabled=false
+    --set standalone.persistence.size={{ milvus_storage_size | default('128Gi') }}
+    --set standalone.resources.requests.memory=2Gi
+    --set standalone.resources.requests.cpu=1
+    --set standalone.resources.limits.memory=8Gi
+    --set standalone.resources.limits.cpu=4
+    --set minio.enabled=false
+    --set externalS3.enabled=true
+    --set externalS3.host={{ minio_endpoint | default('http://minio.katonic-infra.svc.cluster.local:9000') | regex_replace('https?://', '') | regex_replace(':[0-9]+$', '') if resolved_object_storage | trim == 'minio' else object_storage_endpoint | default('s3.' + aws_region | default('us-east-1') + '.amazonaws.com') | regex_replace('https?://', '') | regex_replace(':[0-9]+$', '') }}
+    --set externalS3.port={{ '9000' if resolved_object_storage | trim == 'minio' else '443' }}
+    --set externalS3.useSSL={{ 'false' if resolved_object_storage | trim == 'minio' else 'true' }}
+    --set externalS3.bucketName=milvus-data
+    --set externalS3.accessKey={{ minio_access_key | default(object_storage_access_key | default('')) }}
+    --set externalS3.secretKey={{ minio_secret_key | default(object_storage_secret_key | default('')) }}
+    --set etcd.replicaCount=1
+    --set pulsar.enabled=false
+    --wait --timeout 10m
+  when: milvus_mode | default('standalone') == 'standalone'
+  no_log: true
+
+- name: Deploy Milvus Distributed
+  shell: >
+    helm upgrade --install milvus milvus/milvus
+    --namespace katonic-infra
+    --set cluster.enabled=true
+    --set dataNode.replicas=2
+    --set indexNode.replicas=1
+    --set queryNode.replicas=2
+    --set proxy.replicas=2
+    --set minio.enabled=false
+    --set externalS3.enabled=true
+    --set externalS3.host={{ minio_endpoint | default('http://minio.katonic-infra.svc.cluster.local:9000') | regex_replace('https?://', '') | regex_replace(':[0-9]+$', '') if resolved_object_storage | trim == 'minio' else object_storage_endpoint | default('s3.' + aws_region | default('us-east-1') + '.amazonaws.com') | regex_replace('https?://', '') | regex_replace(':[0-9]+$', '') }}
+    --set externalS3.port={{ '9000' if resolved_object_storage | trim == 'minio' else '443' }}
+    --set externalS3.useSSL={{ 'false' if resolved_object_storage | trim == 'minio' else 'true' }}
+    --set externalS3.bucketName=milvus-data
+    --set externalS3.accessKey={{ minio_access_key | default(object_storage_access_key | default('')) }}
+    --set externalS3.secretKey={{ minio_secret_key | default(object_storage_secret_key | default('')) }}
+    --set etcd.replicaCount=3
+    --set pulsar.enabled=true
+    --set pulsar.broker.replicaCount=2
+    --set pulsar.bookkeeper.replicaCount=3
+    --wait --timeout 15m
+  when: milvus_mode | default('standalone') == 'distributed'
+  no_log: true
+
+- name: Wait for Milvus ready
+  shell: >
+    kubectl wait --for=condition=ready pod
+    -l app.kubernetes.io/name=milvus
+    -n katonic-infra
+    --timeout=300s
+  retries: 5
+  delay: 30
+
+- name: Display Milvus status
+  debug:
+    msg: "Milvus ({{ milvus_mode | default('standalone') }}) deployed in katonic-infra"

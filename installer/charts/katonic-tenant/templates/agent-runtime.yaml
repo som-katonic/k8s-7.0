@@ -1,0 +1,92 @@
+{{- if .Values.agentRuntime.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runtime
+  namespace: {{ include "tenant.namespace" . }}
+  labels:
+    app.kubernetes.io/name: agent-runtime
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.agentRuntime.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-runtime
+      katonic.ai/org-slug: {{ .Values.tenant.orgSlug | quote }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-runtime
+        {{- include "tenant.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: tenant-workload
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agent-runtime
+          image: "{{ .Values.global.imageRegistry }}/katonic/agent-runtime:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8008
+          env:
+            - name: SERVICE_NAME
+              value: "agent-runtime"
+            - name: PORT
+              value: "8008"
+            - name: TENANT_ID
+              value: {{ .Values.tenant.orgSlug | quote }}
+            - name: ORG_SLUG
+              value: {{ .Values.tenant.orgSlug | quote }}
+            - name: DEPLOYMENT_MODE
+              value: "cloud"
+            - name: PLATFORM_NAMESPACE
+              value: "katonic-system"
+            # Connect to shared platform services
+            - name: AGENT_API_URL
+              value: "http://agent-api.katonic-system.svc.cluster.local:8007"
+            - name: MCP_GATEWAY_URL
+              value: "http://mcp-gateway.katonic-system.svc.cluster.local:8009"
+            - name: AI_GATEWAY_URL
+              value: "http://ai-gateway.katonic-system.svc.cluster.local:8010"
+            - name: KNOWLEDGE_ENGINE_URL
+              value: "http://knowledge-engine.katonic-system.svc.cluster.local:8011"
+            - name: GUARDRAILS_URL
+              value: "http://guardrails-engine.katonic-system.svc.cluster.local:8006"
+            - name: GOVERNANCE_PROXY_URL
+              value: "http://governance-proxy.katonic-system.svc.cluster.local:8003"
+          resources:
+            {{- toYaml .Values.agentRuntime.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-runtime
+  namespace: {{ include "tenant.namespace" . }}
+  labels:
+    app.kubernetes.io/name: agent-runtime
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8008
+      targetPort: http
+      name: http
+  selector:
+    app.kubernetes.io/name: agent-runtime
+    katonic.ai/org-slug: {{ .Values.tenant.orgSlug | quote }}
+{{- end }}
