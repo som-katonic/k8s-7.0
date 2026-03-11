@@ -1,0 +1,129 @@
+{{- $namespace := .Values.infra.keycloak.namespace -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: {{ $namespace }}
+  labels:
+    app: keycloak
+spec:
+  replicas: {{ .Values.infra.keycloak.replicaCount }}
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: keycloak
+          image: "{{ .Values.infra.keycloak.image.repository }}:{{ .Values.infra.keycloak.image.tag }}"
+          imagePullPolicy: {{ .Values.infra.keycloak.image.pullPolicy }}
+          args:
+            - start
+            - --db=postgres
+            - --db-url-host=$(POSTGRES_HOST)
+            - --db-url-port=$(POSTGRES_PORT)
+            - --db-url-database={{ .Values.infra.keycloak.keycloak.dbName }}
+            - --db-username=$(POSTGRES_USER)
+            - --db-password=$(POSTGRES_PASSWORD)
+            - --hostname=https://{{ .Values.domain }}{{ .Values.infra.keycloak.keycloak.httpRelativePath }}
+            - --hostname-strict={{ .Values.infra.keycloak.keycloak.hostnameStrict }}
+            - --http-enabled={{ .Values.infra.keycloak.keycloak.httpEnabled }}
+            - --http-relative-path={{ .Values.infra.keycloak.keycloak.httpRelativePath }}
+            - --proxy-headers={{ .Values.infra.keycloak.keycloak.proxyHeaders }}
+            - --health-enabled={{ .Values.infra.keycloak.keycloak.healthEnabled }}
+            - --metrics-enabled={{ .Values.infra.keycloak.keycloak.metricsEnabled }}
+          env:
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.infra.keycloak.configMapName }}
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.infra.keycloak.configMapName }}
+                  key: POSTGRES_PORT
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.infra.keycloak.secretName }}
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.infra.keycloak.secretName }}
+                  key: POSTGRES_PASSWORD
+            - name: KC_DB_SCHEMA
+              value: {{ .Values.infra.keycloak.keycloak.dbSchema }}
+            - name: KEYCLOAK_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.infra.keycloak.secretName }}
+                  key: KEYCLOAK_ADMIN_USER
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.infra.keycloak.secretName }}
+                  key: KEYCLOAK_ADMIN_PASSWORD
+          ports:
+            - name: http
+              containerPort: {{ .Values.infra.keycloak.ports.http }}
+            - name: management
+              containerPort: {{ .Values.infra.keycloak.ports.management }}
+          resources:
+            requests:
+              cpu: {{ .Values.infra.keycloak.resources.requests.cpu }}
+              memory: {{ .Values.infra.keycloak.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.infra.keycloak.resources.limits.cpu }}
+              memory: {{ .Values.infra.keycloak.resources.limits.memory }}
+          startupProbe:
+            httpGet:
+              path: /auth/health/started
+              port: {{ .Values.infra.keycloak.ports.management }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /auth/health/ready
+              port: {{ .Values.infra.keycloak.ports.management }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /auth/health/live
+              port: {{ .Values.infra.keycloak.ports.management }}
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+---
+# Service name is hardcoded as "keycloak" — NOT release-prefixed.
+# All backend services connect to "keycloak" by this exact name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: {{ $namespace }}
+  labels:
+    app: keycloak
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: {{ .Values.infra.keycloak.ports.http }}
+      targetPort: {{ .Values.infra.keycloak.ports.http }}
+    - name: management
+      port: {{ .Values.infra.keycloak.ports.management }}
+      targetPort: {{ .Values.infra.keycloak.ports.management }}
+  type: {{ .Values.infra.keycloak.service.type }}
