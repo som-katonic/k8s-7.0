@@ -1,0 +1,129 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-runtime
+  namespace: katonic
+spec:
+  selector:
+    app: agent-runtime
+  ports:
+    - name: http-api
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runtime
+  namespace: katonic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-runtime
+  template:
+    metadata:
+      labels:
+        app: agent-runtime
+    spec:
+      enableServiceLinks: false
+      imagePullSecrets:
+        - name: dockerhub-secret
+      containers:
+        - name: agent-runtime
+          image: katonic/agent-runtime:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PLATFORM_ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: PLATFORM_ENVIRONMENT
+            - name: PLATFORM_SERVICE_NAME
+              value: "agent-runtime"
+            - name: AI_GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: AI_GATEWAY_URL
+            - name: GUARDRAILS_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: GUARDRAILS_URL
+            - name: GOVERNANCE_PROXY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: GOVERNANCE_URL
+            - name: KNOWLEDGE_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KNOWLEDGE_ENGINE_URL
+            - name: MCP_GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: MCP_GATEWAY_URL
+            - name: ADMIN_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: ADMIN_API_URL
+            - name: REDIS_URL
+              value: "redis://redis:6379"
+            - name: OTEL_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: OTEL_ENABLED
+            # -- Keycloak --
+            - name: KEYCLOAK_SERVER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_SERVER_URL
+            - name: KEYCLOAK_REALM
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_REALM
+            - name: KEYCLOAK_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_AUDIENCE
+            - name: KEYCLOAK_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: KEYCLOAK_ISSUER
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /v1/health
+              port: 8000
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8000
+            periodSeconds: 15
+            failureThreshold: 5

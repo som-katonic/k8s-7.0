@@ -1,0 +1,21 @@
+---
+# Azure Files NFS StorageClass for shared ReadWriteMany storage.
+# Used by: storage datasets, workspace shared volumes, model cache.
+# Requires: Azure Files CSI driver (pre-installed on AKS).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azurefile-nfs
+  labels:
+    app.kubernetes.io/part-of: katonic-platform
+provisioner: file.csi.azure.com
+parameters:
+  protocol: nfs
+  skuName: Premium_LRS
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - nconnect=4
+  - hard
+  - noresvport

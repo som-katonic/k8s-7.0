@@ -1,0 +1,21 @@
+# ── Istio RequestAuthentication: Validate Keycloak JWTs at mesh level ──
+# Invalid tokens are rejected before reaching any service.
+# Requests WITHOUT tokens are allowed through (AuthorizationPolicy handles enforcement).
+#
+# JWKS is fetched from the Keycloak application port (8080), not the
+# management port (9000). The /realms/platform/ endpoint is part of
+# the OpenID Connect protocol.
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: keycloak-jwt
+  namespace: katonic
+spec:
+  jwtRules:
+    - issuer: "https://preview.katonic.ai/auth/realms/platform"
+      jwksUri: "http://keycloak.katonic.svc.cluster.local:8080/auth/realms/platform/protocol/openid-connect/certs"
+      audiences:
+        - "account"
+        - "platform-api"
+        - "platform-ui"
+      forwardOriginalToken: true

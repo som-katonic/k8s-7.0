@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.infra.modelCache.pvc.name }}
+  namespace: {{ .Values.infra.modelCache.namespace }}
+  labels:
+    app.kubernetes.io/part-of: {{ .Values.infra.modelCache.labels.partOf }}
+    platform-component: {{ .Values.infra.modelCache.labels.component }}
+spec:
+  accessModes:
+    - {{ .Values.infra.modelCache.pvc.accessMode }}
+  storageClassName: {{ .Values.infra.modelCache.pvc.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.infra.modelCache.pvc.storage }}

@@ -1,0 +1,286 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: katonic
+
+resources:
+  - ../../base
+  - nodeport-services.yaml
+
+patches:
+  # ── Override environment to development ──
+  - target:
+      kind: ConfigMap
+      name: platform-config
+    patch: |
+      - op: replace
+        path: /data/PLATFORM_ENVIRONMENT
+        value: "development"
+
+  # ── Lower resource limits for minikube (8GB VM) ──
+
+  # Postgres
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 768Mi
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 2Gi
+
+  # Redis
+  - target:
+      kind: StatefulSet
+      name: redis
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 1Gi
+
+  # ClickHouse
+  - target:
+      kind: StatefulSet
+      name: clickhouse
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 5Gi
+
+  # ── Heavy NLP services (need reduced limits for minikube) ──
+
+  # Governance Proxy — spaCy + Presidio NLP. Override to 1 worker (Dockerfile default is 2)
+  # to halve memory usage on minikube. Single worker needs ~800Mi for en_core_web_lg model.
+  - target:
+      kind: Deployment
+      name: governance-proxy
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 768Mi
+          limits:
+            cpu: 500m
+            memory: 1536Mi
+      - op: add
+        path: /spec/template/spec/containers/0/command
+        value: ["uvicorn"]
+      - op: add
+        path: /spec/template/spec/containers/0/args
+        value: ["platform_governance_proxy.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+  # Guardrails Engine — spaCy + Presidio NLP. Override to 1 worker for minikube.
+  - target:
+      kind: Deployment
+      name: guardrails-engine
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 768Mi
+          limits:
+            cpu: 500m
+            memory: 1536Mi
+      - op: add
+        path: /spec/template/spec/containers/0/command
+        value: ["uvicorn"]
+      - op: add
+        path: /spec/template/spec/containers/0/args
+        value: ["platform_guardrails.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+  # Knowledge Engine (base: 512Mi req / 2Gi lim → 256Mi / 512Mi)
+  - target:
+      kind: Deployment
+      name: knowledge-engine
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+  # AI Gateway (base: 512Mi req / 1Gi lim → 256Mi / 512Mi)
+  - target:
+      kind: Deployment
+      name: ai-gateway
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+  # Agent Runtime (base: 512Mi req / 1Gi lim → 128Mi / 384Mi)
+  - target:
+      kind: Deployment
+      name: agent-runtime
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 384Mi
+
+  # ── Lighter backend services (reduce for minikube) ──
+
+  # Admin API (base: 256Mi / 512Mi → 128Mi / 384Mi)
+  - target:
+      kind: Deployment
+      name: admin-api
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 384Mi
+
+  # Agent API (base: 256Mi / 512Mi → 128Mi / 384Mi)
+  - target:
+      kind: Deployment
+      name: agent-api
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 384Mi
+
+  # MCP Gateway (base: 128Mi / 512Mi → 64Mi / 256Mi)
+  - target:
+      kind: Deployment
+      name: mcp-gateway
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+
+  # Model Deployment Service (base: 256Mi / 512Mi → 128Mi / 384Mi)
+  - target:
+      kind: Deployment
+      name: model-deployment-service
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 384Mi
+
+  # Observability (base: 256Mi / 512Mi → 128Mi / 384Mi)
+  - target:
+      kind: Deployment
+      name: observability
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 384Mi
+
+  # Platform Backend (base: 256Mi / 512Mi → 128Mi / 384Mi)
+  - target:
+      kind: Deployment
+      name: platform-backend
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 384Mi
+
+  # Remote Connections (base: 128Mi / 512Mi → 64Mi / 256Mi)
+  - target:
+      kind: Deployment
+      name: remote-connections
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+
+  # Workspace Service (base: 256Mi / 512Mi → 128Mi / 384Mi)
+  - target:
+      kind: Deployment
+      name: workspace-service
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 384Mi

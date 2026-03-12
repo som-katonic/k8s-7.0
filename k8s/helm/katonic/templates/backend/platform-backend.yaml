@@ -1,0 +1,159 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.platformBackend.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.platformBackend.name }}
+spec:
+  selector:
+    app: {{ .Values.platformBackend.name }}
+  ports:
+    - name: http-api
+      port: {{ .Values.platformBackend.service.port }}
+      targetPort: {{ .Values.platformBackend.service.targetPort }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.platformBackend.name }}
+  namespace: {{ .Values.global.namespace }}
+spec:
+  replicas: {{ .Values.platformBackend.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.platformBackend.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.platformBackend.name }}
+    spec:
+      enableServiceLinks: false
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      containers:
+        - name: {{ .Values.platformBackend.name }}
+          image: "{{ .Values.platformBackend.image.repository }}:{{ .Values.platformBackend.image.tag }}"
+          imagePullPolicy: {{ .Values.platformBackend.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.platformBackend.service.targetPort }}
+
+          env:
+            - name: PORT
+              value: "{{ .Values.platformBackend.service.targetPort }}"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secret }}
+                  key: DATABASE_URL
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: REDIS_HOST
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: REDIS_PORT
+            - name: ADMIN_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: ADMIN_API_URL
+            - name: OBSERVABILITY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: OBSERVABILITY_URL
+            - name: GUARDRAILS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: GUARDRAILS_URL
+            - name: GOVERNANCE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: GOVERNANCE_URL
+            - name: ASSISTANT_API
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: AGENT_API_URL
+            - name: ADK_AGENT_API
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: AGENT_RUNTIME_URL
+            - name: MCP_GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: MCP_GATEWAY_URL
+            - name: AI_GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: AI_GATEWAY_URL
+            - name: KNOWLEDGE_ENGINE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: KNOWLEDGE_ENGINE_URL
+            - name: MODEL_DEPLOY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: MODEL_DEPLOY_URL
+            - name: WORKSPACE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: WORKSPACE_SERVICE_URL
+            - name: REMOTE_CONNECTIONS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: REMOTE_CONNECTIONS_URL
+            - name: EXTRACT_API_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: GOVERNANCE_URL
+            - name: PLATFORM_ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: PLATFORM_ENVIRONMENT
+
+          resources:
+            requests:
+              cpu: {{ .Values.platformBackend.resources.requests.cpu }}
+              memory: {{ .Values.platformBackend.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.platformBackend.resources.limits.cpu }}
+              memory: {{ .Values.platformBackend.resources.limits.memory }}
+
+          startupProbe:
+            httpGet:
+              path: /platform/api/health
+              port: {{ .Values.platformBackend.service.targetPort }}
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+
+          readinessProbe:
+            httpGet:
+              path: /platform/api/health
+              port: {{ .Values.platformBackend.service.targetPort }}
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /platform/api/health
+              port: {{ .Values.platformBackend.service.targetPort }}
+            periodSeconds: 15
+            failureThreshold: 5

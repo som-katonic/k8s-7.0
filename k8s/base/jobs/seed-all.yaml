@@ -1,0 +1,146 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-all
+  namespace: katonic
+  labels:
+    app: seed-all
+    app.kubernetes.io/component: seed
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: seed-all
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+      imagePullSecrets:
+        - name: dockerhub-secret
+
+      # ── Wait for PostgreSQL to be ready before seeding ──
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL at ${PG_HOST}:${PG_PORT}..."
+              until pg_isready -h "$PG_HOST" -p "$PG_PORT" -U "$POSTGRES_USER"; do
+                echo "  PostgreSQL not ready — retrying in 3s"
+                sleep 3
+              done
+              echo "PostgreSQL is ready!"
+          env:
+            - name: PG_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_HOST
+            - name: PG_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_PORT
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_USER
+
+      containers:
+        - name: seed-all
+          image: katonic/seed-all:latest
+          imagePullPolicy: Always
+          # Default entrypoint runs: python seed_all.py
+          # Uncomment args below to customise behaviour:
+          #   args: ["--skip-ke"]        # skip Milvus/SpiceDB
+          #   args: ["--only-tables"]    # create tables only
+          env:
+            # ── PostgreSQL connection ──
+            - name: PG_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_HOST
+            - name: PG_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_PORT
+
+            # ── Superuser (for CREATE DATABASE / CREATE ROLE) ──
+            - name: PG_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_USER
+            - name: PG_ADMIN_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_PASSWORD
+
+            # ── Platform database credentials ──
+            - name: PLATFORM_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_USER
+            - name: PLATFORM_DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secret
+                  key: POSTGRES_PASSWORD
+            - name: PLATFORM_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: POSTGRES_DB
+
+            # ── Katonic database credentials ──
+            # Defaults in seed_all.py: katonic / katonic / katonic
+            # Override below if using different credentials.
+            # - name: KATONIC_DB_USER
+            #   value: "katonic"
+            # - name: KATONIC_DB_PASS
+            #   value: "katonic"
+            # - name: KATONIC_DB_NAME
+            #   value: "katonic"
+
+            # ── Knowledge-engine database credentials ──
+            # Defaults in seed_all.py: postgres / postgres / knowledge_engine
+            # - name: KE_DB_USER
+            #   value: "postgres"
+            # - name: KE_DB_PASS
+            #   value: "postgres"
+            # - name: KE_DB_NAME
+            #   value: "knowledge_engine"
+
+            # ── Optional: Milvus ──
+            - name: MILVUS_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-config
+                  key: MILVUS_URI
+
+            # ── Optional: SpiceDB ──
+            # - name: SPICEDB_TARGET
+            #   value: "spicedb:50051"
+            # - name: SPICEDB_TOKEN
+            #   value: "ke-dev-token"
+
+            # ── Tenant ──
+            - name: TENANT_ID
+              value: "default"
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

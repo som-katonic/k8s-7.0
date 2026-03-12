@@ -1,0 +1,34 @@
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: kt-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - hosts:
+        - preview.katonic.ai
+      port:
+        name: https
+        number: 443
+        protocol: HTTPS
+      tls:
+        cipherSuites:
+          - ECDHE-ECDSA-AES128-GCM-SHA256
+          - ECDHE-ECDSA-AES256-GCM-SHA384
+          - ECDHE-RSA-AES128-GCM-SHA256
+          - ECDHE-RSA-AES256-GCM-SHA384
+          - ECDHE-RSA-CHACHA20-POLY1305
+        credentialName: kt-certs
+        maxProtocolVersion: TLSV1_3
+        minProtocolVersion: TLSV1_2
+        mode: SIMPLE
+    - hosts:
+        - preview.katonic.ai
+      port:
+        name: http
+        number: 80
+        protocol: HTTP
+      tls:
+        httpsRedirect: true

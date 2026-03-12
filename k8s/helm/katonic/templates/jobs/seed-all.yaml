@@ -1,0 +1,96 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-all
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: seed-all
+    app.kubernetes.io/component: seed
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app: seed-all
+        sidecar.istio.io/inject: "false"
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+      imagePullSecrets:
+        {{- range .Values.imagePullSecrets }}
+        - name: {{ . }}
+        {{- end }}
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ .Values.image.postgres }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL..."
+              until pg_isready -h "$PG_HOST" -p "$PG_PORT" -U "$POSTGRES_USER"; do
+                echo "  not ready, retry in 3s"; sleep 3
+              done
+              echo "PostgreSQL ready."
+          env:
+            - name: PG_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: POSTGRES_HOST
+            - name: PG_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: POSTGRES_PORT
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secret }}
+                  key: POSTGRES_USER
+      containers:
+        - name: seed-all
+          image: {{ .Values.image.seedAll }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PG_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: POSTGRES_HOST
+            - name: PG_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: POSTGRES_PORT
+            - name: PG_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secret }}
+                  key: POSTGRES_USER
+            - name: PG_ADMIN_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.secret }}
+                  key: POSTGRES_PASSWORD
+            - name: PLATFORM_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: POSTGRES_DB
+            - name: MILVUS_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.global.configMap }}
+                  key: MILVUS_URI
+            - name: TENANT_ID
+              value: {{ .Values.tenantId }}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}

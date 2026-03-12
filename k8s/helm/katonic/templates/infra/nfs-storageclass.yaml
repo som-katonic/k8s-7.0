@@ -1,0 +1,16 @@
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.infra.modelCache.storageClass.name }}
+provisioner: {{ .Values.infra.modelCache.storageClass.provisioner }}
+parameters:
+  protocol: {{ .Values.infra.modelCache.storageClass.parameters.protocol }}
+  skuName: {{ .Values.infra.modelCache.storageClass.parameters.skuName }}
+reclaimPolicy: {{ .Values.infra.modelCache.storageClass.reclaimPolicy }}
+volumeBindingMode: {{ .Values.infra.modelCache.storageClass.volumeBindingMode }}
+allowVolumeExpansion: {{ .Values.infra.modelCache.storageClass.allowVolumeExpansion }}
+mountOptions:
+{{- range .Values.infra.modelCache.storageClass.mountOptions }}
+  - {{ . }}
+{{- end }}

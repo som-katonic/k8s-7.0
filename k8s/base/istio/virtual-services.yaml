@@ -1,0 +1,81 @@
+# ── Ingress: route external traffic to katonic-frontend ──
+# katonic-frontend nginx handles SPA routing and proxies /api/ /platform/ to platform-backend
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: katonic-ingress
+  namespace: katonic
+spec:
+  gateways:
+    - istio-system/kt-gateway
+  hosts:
+    - preview.katonic.ai
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: katonic-frontend.katonic.svc.cluster.local
+            port:
+              number: 3000
+---
+# ── Internal: ai-gateway (LLM proxy — needs long timeout) ──
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: ai-gateway-internal
+  namespace: katonic
+spec:
+  hosts:
+    - ai-gateway.katonic.svc.cluster.local
+  http:
+    - route:
+        - destination:
+            host: ai-gateway.katonic.svc.cluster.local
+            port:
+              number: 8010
+      timeout: 300s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+---
+# ── Internal: eval-engine ──
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: eval-engine-internal
+  namespace: katonic
+spec:
+  hosts:
+    - eval-engine.katonic.svc.cluster.local
+  http:
+    - route:
+        - destination:
+            host: eval-engine.katonic.svc.cluster.local
+            port:
+              number: 8015
+      timeout: 180s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+---
+# ── Internal: agent-runtime (LLM inference — needs long timeout) ──
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: agent-runtime-internal
+  namespace: katonic
+spec:
+  hosts:
+    - agent-runtime.katonic.svc.cluster.local
+  http:
+    - route:
+        - destination:
+            host: agent-runtime.katonic.svc.cluster.local
+            port:
+              number: 8000
+      timeout: 300s
+      retries:
+        attempts: 1
+        retryOn: connect-failure

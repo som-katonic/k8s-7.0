@@ -1,0 +1,114 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-init
+  namespace: katonic
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS platform;
+    CREATE USER IF NOT EXISTS platform_svc IDENTIFIED BY 'change_me_clickhouse';
+    GRANT SELECT, INSERT ON platform.* TO platform_svc;
+    CREATE USER IF NOT EXISTS platform_reader IDENTIFIED BY 'change_me_reader';
+    GRANT SELECT ON platform.* TO platform_reader;
+    USE platform;
+    CREATE TABLE IF NOT EXISTS llm_usage_events (event_id String, timestamp DateTime64(3), trace_id String DEFAULT '', tenant_id String DEFAULT 'default', user_id String DEFAULT '', user_team String DEFAULT '', agent_id String DEFAULT '', agent_version String DEFAULT '', session_id String DEFAULT '', tier String DEFAULT '', provider String DEFAULT '', model String DEFAULT '', tokens_input UInt32 DEFAULT 0, tokens_output UInt32 DEFAULT 0, cost_usd Float64 DEFAULT 0.0, latency_ms UInt32 DEFAULT 0, ttft_ms Nullable(UInt32), status String DEFAULT 'success', error_type Nullable(String), is_fallback UInt8 DEFAULT 0, fallback_from Nullable(String), is_cached UInt8 DEFAULT 0) ENGINE = MergeTree() PARTITION BY toYYYYMM(timestamp) ORDER BY (tenant_id, timestamp, event_id) TTL toDateTime(timestamp) + INTERVAL 180 DAY SETTINGS index_granularity = 8192;
+    CREATE TABLE IF NOT EXISTS tool_usage_events (event_id String, timestamp DateTime64(3), trace_id String DEFAULT '', tenant_id String DEFAULT 'default', user_id String DEFAULT '', user_team String DEFAULT '', agent_id String DEFAULT '', session_id String DEFAULT '', server_type String DEFAULT '', server_name String DEFAULT '', tool_name String DEFAULT '', risk_level String DEFAULT 'low', approval_status String DEFAULT 'not_required', approved_by Nullable(String), latency_ms UInt32 DEFAULT 0, status String DEFAULT 'success', error_type Nullable(String), pii_input UInt8 DEFAULT 0, pii_output UInt8 DEFAULT 0, pii_action Nullable(String)) ENGINE = MergeTree() PARTITION BY toYYYYMM(timestamp) ORDER BY (tenant_id, timestamp, event_id) TTL toDateTime(timestamp) + INTERVAL 180 DAY SETTINGS index_granularity = 8192;
+    CREATE TABLE IF NOT EXISTS admin_action_events (event_id String, timestamp DateTime64(3), trace_id String DEFAULT '', tenant_id String DEFAULT 'default', user_id String DEFAULT '', user_team String DEFAULT '', action_type String DEFAULT '', resource_type String DEFAULT '', resource_id String DEFAULT '', changes String DEFAULT '{}', ip_address Nullable(String)) ENGINE = MergeTree() PARTITION BY toYYYYMM(timestamp) ORDER BY (tenant_id, timestamp, event_id) TTL toDateTime(timestamp) + INTERVAL 90 DAY SETTINGS index_granularity = 8192;
+    CREATE TABLE IF NOT EXISTS policy_decision_events (decision_id String, timestamp DateTime64(3), trace_id String DEFAULT '', tenant_id String DEFAULT 'default', user_id String DEFAULT '', policy_id String DEFAULT '', rule_id String DEFAULT '', action String DEFAULT '', matched_conditions String DEFAULT '{}', tool_name String DEFAULT '', server_name String DEFAULT '', risk_level String DEFAULT 'low', evaluation_ms UInt32 DEFAULT 0) ENGINE = MergeTree() PARTITION BY toYYYYMM(timestamp) ORDER BY (tenant_id, timestamp, decision_id) TTL toDateTime(timestamp) + INTERVAL 365 DAY SETTINGS index_granularity = 8192;
+    CREATE TABLE IF NOT EXISTS guardrail_events (event_id String, timestamp DateTime64(3), trace_id String DEFAULT '', tenant_id String DEFAULT 'default', user_id String DEFAULT '', agent_id String DEFAULT '', session_id String DEFAULT '', direction String DEFAULT 'input', rail_type String DEFAULT '', result String DEFAULT 'pass', confidence Float64 DEFAULT 1.0, details String DEFAULT '{}', latency_ms UInt32 DEFAULT 0) ENGINE = MergeTree() PARTITION BY toYYYYMM(timestamp) ORDER BY (tenant_id, timestamp, event_id) TTL toDateTime(timestamp) + INTERVAL 180 DAY SETTINGS index_granularity = 8192;
+    CREATE TABLE IF NOT EXISTS governance_tool_events (event_id String, timestamp DateTime64(3), tenant_id String DEFAULT 'default', user_id String DEFAULT '', team_id String DEFAULT '', agent_id String DEFAULT '', session_id String DEFAULT '', server_name String DEFAULT '', tool_name String DEFAULT '', risk_level String DEFAULT 'low', decision String DEFAULT 'allow', policy_ids String DEFAULT '', pii_detected UInt8 DEFAULT 0, pii_entity_count UInt32 DEFAULT 0, pii_entity_types String DEFAULT '', output_redacted UInt8 DEFAULT 0, approval_request_id String DEFAULT '', latency_ms UInt32 DEFAULT 0, error String DEFAULT '') ENGINE = MergeTree() PARTITION BY toYYYYMM(timestamp) ORDER BY (tenant_id, timestamp, event_id) TTL toDateTime(timestamp) + INTERVAL 365 DAY SETTINGS index_granularity = 8192;
+    CREATE MATERIALIZED VIEW IF NOT EXISTS mv_llm_hourly_stats ENGINE = SummingMergeTree() PARTITION BY toYYYYMM(hour) ORDER BY (tenant_id, hour, tier, provider) AS SELECT toStartOfHour(timestamp) AS hour, tenant_id, tier, provider, count() AS requests, sum(tokens_input) AS input_tokens, sum(tokens_output) AS output_tokens, sum(cost_usd) AS cost_usd, sum(latency_ms) AS total_latency_ms, countIf(status = 'error') AS errors FROM llm_usage_events GROUP BY hour, tenant_id, tier, provider;
+    CREATE MATERIALIZED VIEW IF NOT EXISTS mv_tool_hourly_stats ENGINE = SummingMergeTree() PARTITION BY toYYYYMM(hour) ORDER BY (tenant_id, hour, server_name, risk_level) AS SELECT toStartOfHour(timestamp) AS hour, tenant_id, server_name, risk_level, count() AS calls, countIf(status = 'blocked') AS blocked, countIf(status = 'error') AS errors, sum(latency_ms) AS total_latency_ms FROM tool_usage_events GROUP BY hour, tenant_id, server_name, risk_level;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: katonic
+spec:
+  selector:
+    app: clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: katonic
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24.3
+          ports:
+            - containerPort: 8123
+            - containerPort: 9000
+          env:
+            - name: CLICKHOUSE_DB
+              value: "platform"
+            - name: CLICKHOUSE_USER
+              value: "default"
+            - name: CLICKHOUSE_PASSWORD
+              value: ""
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "1"
+          volumeMounts:
+            - name: chdata
+              mountPath: /var/lib/clickhouse
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 4Gi
+          startupProbe:
+            exec:
+              command: ["clickhouse-client", "--query", "SELECT 1"]
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["clickhouse-client", "--query", "SELECT 1"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["clickhouse-client", "--query", "SELECT 1"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: clickhouse-init
+  volumeClaimTemplates:
+    - metadata:
+        name: chdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
