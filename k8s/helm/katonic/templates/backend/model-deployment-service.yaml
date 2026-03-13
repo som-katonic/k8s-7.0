@@ -1,10 +1,8 @@
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ .Values.modelDeploymentService.serviceAccount.name }}
   namespace: {{ .Values.global.namespace }}
-
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -12,28 +10,87 @@ metadata:
   name: {{ .Values.modelDeploymentService.role.name }}
   namespace: {{ .Values.global.namespace }}
 rules:
-  - apiGroups: ["", "apps", "batch"]
-    resources: ["pods", "services", "deployments", "jobs", "configmaps", "secrets"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get", "list"]
-
+    resources: ["services", "pods", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ .Values.modelDeploymentService.roleBinding.name }}
   namespace: {{ .Values.global.namespace }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: {{ .Values.modelDeploymentService.role.name }}
 subjects:
   - kind: ServiceAccount
     name: {{ .Values.modelDeploymentService.serviceAccount.name }}
     namespace: {{ .Values.global.namespace }}
-
+roleRef:
+  kind: Role
+  name: {{ .Values.modelDeploymentService.role.name }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.modelDeploymentService.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.modelDeploymentService.name }}
+spec:
+  replicas: {{ .Values.modelDeploymentService.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.modelDeploymentService.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.modelDeploymentService.name }}
+    spec:
+      serviceAccountName: {{ .Values.modelDeploymentService.serviceAccount.name }}
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      containers:
+        - name: {{ .Values.modelDeploymentService.name }}
+          image: {{ .Values.imageRegistry }}{{ .Values.modelDeploymentService.image.repository }}:{{ .Values.modelDeploymentService.image.tag }}
+          imagePullPolicy: {{ .Values.modelDeploymentService.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.modelDeploymentService.containerPort }}
+          env:
+            - name: K8S_IN_CLUSTER
+              value: {{ .Values.modelDeploymentService.env.k8sInCluster | quote }}
+            - name: VLLM_IMAGE
+              value: {{ .Values.modelDeploymentService.env.vllmImage | quote }}
+            - name: TGI_IMAGE
+              value: {{ .Values.modelDeploymentService.env.tgiImage | quote }}
+            - name: NIM_IMAGE_PREFIX
+              value: {{ .Values.modelDeploymentService.env.nimImagePrefix | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.global.configMap }}
+            - secretRef:
+                name: {{ .Values.global.secret }}
+          resources:
+            {{- toYaml .Values.modelDeploymentService.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.modelDeploymentService.containerPort }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.modelDeploymentService.containerPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
 ---
 apiVersion: v1
 kind: Service
@@ -46,122 +103,8 @@ spec:
   selector:
     app: {{ .Values.modelDeploymentService.name }}
   ports:
-    - name: http-api
-      port: {{ .Values.modelDeploymentService.service.port }}
+    - port: {{ .Values.modelDeploymentService.service.port }}
       targetPort: {{ .Values.modelDeploymentService.service.targetPort }}
+      protocol: TCP
 
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .Values.modelDeploymentService.name }}
-  namespace: {{ .Values.global.namespace }}
-spec:
-  replicas: {{ .Values.modelDeploymentService.replicas }}
-  selector:
-    matchLabels:
-      app: {{ .Values.modelDeploymentService.name }}
-  template:
-    metadata:
-      labels:
-        app: {{ .Values.modelDeploymentService.name }}
-    spec:
-      enableServiceLinks: false
-      serviceAccountName: {{ .Values.modelDeploymentService.serviceAccount.name }}
-      imagePullSecrets:
-        - name: {{ .Values.global.imagePullSecret }}
 
-      containers:
-        - name: {{ .Values.modelDeploymentService.name }}
-          image: "{{ .Values.modelDeploymentService.image.repository }}:{{ .Values.modelDeploymentService.image.tag }}"
-          imagePullPolicy: {{ .Values.modelDeploymentService.image.pullPolicy }}
-          ports:
-            - containerPort: {{ .Values.modelDeploymentService.containerPort }}
-
-          env:
-            - name: MDS_DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: POSTGRES_URL
-            - name: MDS_K8S_IN_CLUSTER
-              value: "{{ .Values.modelDeploymentService.env.k8sInCluster }}"
-            - name: MDS_K8S_NAMESPACE
-              value: "{{ .Values.global.namespace }}"
-            - name: MDS_VLLM_IMAGE
-              value: "{{ .Values.modelDeploymentService.env.vllmImage }}"
-            - name: MDS_TGI_IMAGE
-              value: "{{ .Values.modelDeploymentService.env.tgiImage }}"
-            - name: MDS_NIM_IMAGE_PREFIX
-              value: "{{ .Values.modelDeploymentService.env.nimImagePrefix }}"
-            - name: MDS_JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: JWT_SECRET
-            - name: MDS_MODEL_CACHE_PVC
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: MODEL_CACHE_PVC
-            - name: PLATFORM_ENVIRONMENT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: PLATFORM_ENVIRONMENT
-
-            # Keycloak
-            - name: KEYCLOAK_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: KEYCLOAK_CLIENT_SECRET
-            - name: KEYCLOAK_SERVER_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_SERVER_URL
-            - name: KEYCLOAK_REALM
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_REALM
-            - name: KEYCLOAK_AUDIENCE
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_AUDIENCE
-            - name: KEYCLOAK_ISSUER
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_ISSUER
-
-          resources:
-            requests:
-              cpu: {{ .Values.modelDeploymentService.resources.requests.cpu }}
-              memory: {{ .Values.modelDeploymentService.resources.requests.memory }}
-            limits:
-              cpu: {{ .Values.modelDeploymentService.resources.limits.cpu }}
-              memory: {{ .Values.modelDeploymentService.resources.limits.memory }}
-
-          startupProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.modelDeploymentService.containerPort }}
-            failureThreshold: 30
-            periodSeconds: 10
-            timeoutSeconds: 3
-
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.modelDeploymentService.containerPort }}
-            periodSeconds: 10
-
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.modelDeploymentService.containerPort }}
-            periodSeconds: 15
-            failureThreshold: 5

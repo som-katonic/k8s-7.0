@@ -1,745 +1,382 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Katonic 7.0 — Helm Deploy Script
-# =============================================================================
-# Usage:  ./helm-deploy.sh <command> [options]
-#
-# Commands:
-#   deploy      Full install / upgrade  (creates secrets, configmap, then Helm)
-#   upgrade     Re-run Helm upgrade only (secrets/configmap already exist)
-#   template    Dry-run render to stdout
-#   lint        Lint the Helm chart
-#   diff        Show what would change (requires helm-diff plugin)
-#   status      Show pods, deployments, PVCs, Istio resources
-#   logs        Tail logs for a service  (--service <name>)
-#   restart     Rolling restart all deployments
-#   uninstall   Remove Helm release, keep PVCs
-#   purge       Remove Helm release + delete all PVCs  ⚠ DESTRUCTIVE
-#
-# Options:
-#   --domain     Your platform domain  e.g. platform.mycompany.com  [REQUIRED]
-#   --env        dev | staging | production  (default: production)
-#   --registry   Image registry prefix  e.g. "katonic.azurecr.io/"
-#   --tag        Image tag  (default: latest)
-#   --cert       Path to TLS .crt file  (default: ./platform.crt)
-#   --key        Path to TLS .key file  (default: ./platform.key)
-#   --dry-run    Helm server dry-run — no changes applied
-#   --debug      Verbose Helm output
-#   --service    Service name for logs command
-#
-# CI/CD env vars (skip interactive prompts when set):
-#   KATONIC_DB_PASSWORD        Postgres password
-#   KATONIC_CLICKHOUSE_PASS    ClickHouse password
-#   KATONIC_KC_ADMIN_PASS      Keycloak bootstrap admin password
-#   KATONIC_KC_CLIENT_SECRET   Keycloak client secret
-#   KATONIC_ADMIN_EMAIL        Platform super-admin email
-#   KATONIC_ADMIN_PASSWORD     Platform super-admin password
-#   KATONIC_REGISTRY_USER      Registry username
-#   KATONIC_REGISTRY_PASS      Registry password
-#   KATONIC_SMTP_PASS          SMTP password  (only needed if smtp.enabled=true)
+# helm-deploy.sh — Katonic 7.0 platform installer
 # =============================================================================
 set -euo pipefail
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CHART_DIR="$SCRIPT_DIR/helm/katonic"
-VALUES_FILE="$CHART_DIR/values.yaml"
-
 # ── Defaults ──────────────────────────────────────────────────────────────────
-RELEASE_NAME="katonic"
 NAMESPACE="katonic"
-ENV="production"
+RELEASE="katonic"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHART_DIR="${SCRIPT_DIR}/helm/katonic"
+# Bundled Istio 1.26.0 Helm charts — place the istio-1.26.0 folder here:
+ISTIO_INSTALLER_DIR="${SCRIPT_DIR}/istio-installer/istio-1.26.0"
 DOMAIN=""
-REGISTRY=""
-TAG="latest"
-CERT_FILE="$SCRIPT_DIR/platform.crt"
-KEY_FILE="$SCRIPT_DIR/platform.key"
+SKIP_ISTIO=false
 DRY_RUN=false
-DEBUG_FLAG=""
-SERVICE=""
 
-# ── Colours ───────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
-step()    { echo -e "\n${CYAN}${BOLD}▶ $*${NC}"; }
-heading() { echo -e "\n${BOLD}$*${NC}"; }
+# Istio image hub — Katonic mirrors Istio images under quay.io/katonic
+ISTIO_HUB="quay.io/katonic"
+ISTIO_TAG="1.26.0"
 
-# ── Arg parsing ───────────────────────────────────────────────────────────────
-COMMAND="${1:-help}"
-shift || true
+# ── Usage ─────────────────────────────────────────────────────────────────────
+usage() {
+  cat <<EOF
+Usage: $0 <command> [flags]
 
+Commands:
+  deploy      Full install / upgrade
+  upgrade     Helm upgrade only (secrets/configmap already exist)
+  delete      Uninstall release and namespace
+  status      Show rollout status of all deployments
+
+Flags:
+  --domain      <fqdn>     Platform FQDN (required for deploy)  e.g. platform.acme.com
+  --namespace   <ns>       Kubernetes namespace  (default: katonic)
+  --release     <name>     Helm release name      (default: katonic)
+  --skip-istio             Skip Istio install step (already installed on cluster)
+  --dry-run                Helm --dry-run (template preview, no apply)
+  --help                   Show this message
+
+Istio installer:
+  Place the istio-1.26.0 release folder at:
+    <repo-root>/istio-installer/istio-1.26.0/
+  The script uses its bundled Helm charts to install Istio before Katonic.
+
+Environment variables (CI/CD — skip interactive prompts):
+  KATONIC_POSTGRES_URL     Full postgres:// DSN  e.g. postgres://user:pass@host:5432/db
+  KATONIC_REDIS_URL        redis://host:6379
+  KATONIC_CLICKHOUSE_PASS  ClickHouse password
+  KATONIC_DOCKERHUB_USER   DockerHub username
+  KATONIC_DOCKERHUB_TOKEN  DockerHub token / password
+EOF
+}
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+COMMAND=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --env)       ENV="$2";       shift 2 ;;
-    --domain)    DOMAIN="$2";    shift 2 ;;
-    --registry)  REGISTRY="$2";  shift 2 ;;
-    --tag)       TAG="$2";       shift 2 ;;
-    --cert)      CERT_FILE="$2"; shift 2 ;;
-    --key)       KEY_FILE="$2";  shift 2 ;;
-    --dry-run)   DRY_RUN=true;   shift   ;;
-    --debug)     DEBUG_FLAG="--debug"; shift ;;
-    --service)   SERVICE="$2";   shift 2 ;;
-    *) warn "Unknown option: $1"; shift ;;
+    deploy|upgrade|delete|status) COMMAND="$1"; shift ;;
+    --domain)      DOMAIN="$2";    shift 2 ;;
+    --namespace)   NAMESPACE="$2"; shift 2 ;;
+    --release)     RELEASE="$2";   shift 2 ;;
+    --skip-istio)  SKIP_ISTIO=true; shift ;;
+    --dry-run)     DRY_RUN=true;   shift ;;
+    --help|-h)     usage; exit 0 ;;
+    *) echo "Unknown argument: $1"; usage; exit 1 ;;
   esac
 done
 
-case "$ENV" in dev|staging|production) ;; *) error "Unknown env '$ENV'. Use: dev|staging|production" ;; esac
+[[ -z "$COMMAND" ]] && { usage; exit 1; }
 
-# ── Resolve domain ────────────────────────────────────────────────────────────
-resolve_domain() {
-  if [[ -z "$DOMAIN" ]]; then
-    local yaml_domain
-    yaml_domain=$(grep '^domain:' "$VALUES_FILE" 2>/dev/null | awk '{print $2}' | tr -d '"' || true)
-    if [[ -z "$yaml_domain" || "$yaml_domain" == "preview.katonic.ai" ]]; then
-      echo ""
-      warn "No --domain provided and values.yaml still has the default placeholder."
-      read -rp "  Enter your platform domain (e.g. platform.mycompany.com): " DOMAIN
-      [[ -n "$DOMAIN" ]] || error "Domain is required."
-    else
-      DOMAIN="$yaml_domain"
-      info "Domain from values.yaml: $DOMAIN"
-    fi
-  fi
+# ── Colour helpers ────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
+success() { echo -e "${GREEN}[OK]${NC}    $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+err()     { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
+# ── Prerequisites ─────────────────────────────────────────────────────────────
+check_prereqs() {
+  for cmd in kubectl helm python3; do
+    command -v "$cmd" &>/dev/null || { err "$cmd not found in PATH"; exit 1; }
+  done
 }
 
-# ── Pre-flight checks ─────────────────────────────────────────────────────────
-preflight() {
-  step "Pre-flight checks"
-  command -v helm    >/dev/null 2>&1 || error "helm not found — https://helm.sh/docs/intro/install/"
-  command -v kubectl >/dev/null 2>&1 || error "kubectl not found"
-  command -v base64  >/dev/null 2>&1 || error "base64 not found"
-
-  [[ -d "$CHART_DIR"  ]] || error "Chart directory not found: $CHART_DIR"
-  [[ -f "$VALUES_FILE" ]] || error "Values file not found: $VALUES_FILE"
-
-  if [[ "$COMMAND" != "template" && "$COMMAND" != "lint" ]]; then
-    kubectl cluster-info >/dev/null 2>&1 \
-      || error "Cannot reach Kubernetes cluster — check your kubeconfig"
-    info "Cluster:     $(kubectl config current-context)"
-  fi
-
-  info "Helm:        $(helm version --short)"
-  info "Chart:       $CHART_DIR"
-  info "Environment: $ENV"
-  info "Domain:      ${DOMAIN:-not set}"
-  info "Registry:    ${REGISTRY:-DockerHub (default)}"
-  info "Tag:         $TAG"
-}
-
-# ── Collect all secrets interactively (or from env vars) ─────────────────────
-declare -A SECRETS   # key=k8s-secret-key  value=plaintext
-
+# ── Secret collection ─────────────────────────────────────────────────────────
 collect_secrets() {
-  heading "━━ Collecting credentials ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  Secrets are written to the 'platform-secret' Kubernetes Secret."
-  echo "  They are NEVER stored in values.yaml or any file."
-  echo "  Set the CI/CD env vars listed in the script header to skip prompts."
-  echo ""
+  info "Collecting deployment secrets..."
 
-  # Helper: prompt for password with confirmation; or read from env var
-  prompt_pass() {
-    local key="$1" label="$2" envvar="$3" min="${4:-12}"
-    if [[ -n "${!envvar:-}" ]]; then
-      SECRETS[$key]="${!envvar}"
-      info "  $label: (from env \$$envvar)"
-      return
-    fi
-    local val confirm
-    while true; do
-      read -rsp "  $label (min ${min} chars): " val; echo ""
-      [[ ${#val} -ge $min ]] || { warn "Too short. Minimum $min characters."; continue; }
-      read -rsp "  Confirm $label: " confirm; echo ""
-      [[ "$val" == "$confirm" ]] && break || warn "Mismatch — try again."
-    done
-    SECRETS[$key]="$val"
-  }
-
-  # Helper: prompt for plain value; or read from env var
-  prompt_val() {
-    local key="$1" label="$2" envvar="$3" default="${4:-}"
-    if [[ -n "${!envvar:-}" ]]; then
-      SECRETS[$key]="${!envvar}"
-      info "  $label: (from env \$$envvar)"
-      return
-    fi
-    local val
-    read -rp "  $label${default:+ [$default]}: " val
-    SECRETS[$key]="${val:-$default}"
-  }
-
-  # ── Postgres ────────────────────────────────────────────────────────────────
-  step "PostgreSQL"
-  SECRETS[POSTGRES_USER]="platform"
-  SECRETS[POSTGRES_DB]="platform"
-  info "  User: platform  |  DB: platform  (fixed)"
-  prompt_pass POSTGRES_PASSWORD "Postgres password" KATONIC_DB_PASSWORD 12
-
-  # ── ClickHouse ──────────────────────────────────────────────────────────────
-  step "ClickHouse"
-  prompt_pass CLICKHOUSE_PASSWORD "ClickHouse password" KATONIC_CLICKHOUSE_PASS 12
-
-  # ── Keycloak bootstrap admin (used only by Keycloak pod itself) ─────────────
-  step "Keycloak bootstrap admin  (Keycloak pod internal admin)"
-  SECRETS[KEYCLOAK_ADMIN_USER]="admin"
-  info "  Admin user: admin  (fixed)"
-  prompt_pass KEYCLOAK_ADMIN_PASSWORD "Keycloak bootstrap admin password" KATONIC_KC_ADMIN_PASS 12
-
-  # ── Keycloak client secret ──────────────────────────────────────────────────
-  step "Keycloak API client secret"
-  if [[ -n "${KATONIC_KC_CLIENT_SECRET:-}" ]]; then
-    SECRETS[KEYCLOAK_CLIENT_SECRET]="$KATONIC_KC_CLIENT_SECRET"
-    info "  Client secret: (from env)"
-  else
-    # Auto-generate if not provided
-    local gen_secret
-    gen_secret=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)
-    read -rp "  Keycloak client secret [auto-generate]: " val
-    SECRETS[KEYCLOAK_CLIENT_SECRET]="${val:-$gen_secret}"
-    [[ -z "$val" ]] && info "  Auto-generated client secret."
-  fi
-
-  # ── Platform super-admin (created in Keycloak by seed-keycloak job) ─────────
-  step "Platform super-admin user  (login to Katonic platform)"
-  prompt_val  KATONIC_ADMIN_EMAIL    "Admin email"    KATONIC_ADMIN_EMAIL    "admin@katonic.ai"
-  prompt_pass KATONIC_ADMIN_PASSWORD "Admin password" KATONIC_ADMIN_PASSWORD 12
-
-  # ── SMTP (optional) ─────────────────────────────────────────────────────────
-  local smtp_enabled
-  smtp_enabled=$(grep 'smtp:' "$VALUES_FILE" -A1 | grep 'enabled:' | awk '{print $2}' || echo "false")
-  if [[ "$smtp_enabled" == "true" ]]; then
-    step "SMTP password  (smtp.enabled=true in values.yaml)"
-    prompt_pass SMTP_PASSWORD "SMTP password" KATONIC_SMTP_PASS 6
-  fi
-}
-
-# ── Write platform-secret ─────────────────────────────────────────────────────
-create_platform_secret() {
-  step "Creating / updating platform-secret"
-
-  local args=()
-  for key in "${!SECRETS[@]}"; do
-    args+=("--from-literal=${key}=${SECRETS[$key]}")
-  done
-
-  # Delete and recreate (idempotent, avoids partial patch issues)
-  kubectl delete secret platform-secret -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1
-  kubectl create secret generic platform-secret \
-    -n "$NAMESPACE" \
-    "${args[@]}"
-
-  info "platform-secret created with ${#SECRETS[@]} keys."
-}
-
-# ── Write platform-config ConfigMap ──────────────────────────────────────────
-create_platform_configmap() {
-  step "Creating / updating platform-config ConfigMap"
-
-  local smtp_enabled smtp_host smtp_port smtp_user smtp_from smtp_ssl smtp_auth
-  smtp_enabled=$(grep -A20 '^smtp:' "$VALUES_FILE" | grep 'enabled:' | awk '{print $2}' || echo "false")
-  smtp_host=$(grep -A20 '^smtp:' "$VALUES_FILE" | grep 'host:' | awk '{print $2}' | tr -d '"' || echo "")
-  smtp_port=$(grep -A20 '^smtp:' "$VALUES_FILE" | grep 'port:' | awk '{print $2}' || echo "465")
-  smtp_user=$(grep -A20 '^smtp:' "$VALUES_FILE" | grep 'user:' | awk '{print $2}' | tr -d '"' || echo "")
-  smtp_from=$(grep -A20 '^smtp:' "$VALUES_FILE" | grep 'from:' | awk '{print $2}' | tr -d '"' || echo "support@katonic.ai")
-  smtp_ssl=$(grep -A20 '^smtp:' "$VALUES_FILE"  | grep 'ssl:'  | awk '{print $2}' || echo "true")
-  smtp_auth=$(grep -A20 '^smtp:' "$VALUES_FILE" | grep 'auth:' | awk '{print $2}' || echo "true")
-
-  local workspace_timeout
-  workspace_timeout=$(grep '^workspaceTimeoutHours:' "$VALUES_FILE" | awk '{print $2}' | tr -d '"' || echo "12")
-
-  kubectl delete configmap platform-config -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1
-  kubectl create configmap platform-config \
-    -n "$NAMESPACE" \
-    --from-literal=POSTGRES_HOST=postgres \
-    --from-literal=POSTGRES_PORT=5432 \
-    --from-literal=POSTGRES_DB=platform \
-    --from-literal=KEYCLOAK_SERVER_URL="https://${DOMAIN}/auth" \
-    --from-literal=KEYCLOAK_REALM=platform \
-    --from-literal=KEYCLOAK_AUDIENCE=platform-api \
-    --from-literal=KEYCLOAK_ISSUER="https://${DOMAIN}/auth/realms/platform" \
-    --from-literal=MILVUS_URI="http://milvus:19530" \
-    --from-literal=PLATFORM_ENVIRONMENT="$ENV" \
-    --from-literal=ADMIN_API_URL="http://admin-api:8000" \
-    --from-literal=WORKSPACE_TIMEOUT_HOURS="$workspace_timeout" \
-    --from-literal=SMTP_ENABLED="$smtp_enabled" \
-    --from-literal=SMTP_HOST="$smtp_host" \
-    --from-literal=SMTP_PORT="$smtp_port" \
-    --from-literal=SMTP_USER="$smtp_user" \
-    --from-literal=SMTP_FROM="$smtp_from" \
-    --from-literal=SMTP_SSL="$smtp_ssl" \
-    --from-literal=SMTP_AUTH="$smtp_auth"
-
-  info "platform-config ConfigMap created."
-  info "  KEYCLOAK_ISSUER  = https://${DOMAIN}/auth/realms/platform"
-  info "  SMTP_ENABLED     = $smtp_enabled"
-  info "  WORKSPACE_TIMEOUT= ${workspace_timeout}h"
-}
-
-# ── Create imagePullSecret for registry ──────────────────────────────────────
-create_registry_secret() {
-  step "Creating / updating dockerhub-secret (imagePullSecret)"
-
-  local reg_server reg_user reg_pass
-
-  if [[ -n "${KATONIC_REGISTRY_USER:-}" && -n "${KATONIC_REGISTRY_PASS:-}" ]]; then
-    reg_user="$KATONIC_REGISTRY_USER"
-    reg_pass="$KATONIC_REGISTRY_PASS"
-    info "  Registry credentials from env."
-  else
+  # ── PostgreSQL ──
+  if [[ -z "${KATONIC_POSTGRES_URL:-}" ]]; then
     echo ""
-    echo "  Docker registry credentials are needed to pull Katonic images."
-    echo "  Registry: ${REGISTRY:-registry-1.docker.io}"
-    read -rp "  Registry username: " reg_user
-    read -rsp "  Registry password: " reg_pass; echo ""
+    echo "Enter the external PostgreSQL connection URL."
+    echo "  Format: postgres://USER:PASSWORD@HOST:PORT/DBNAME"
+    read -rsp "  POSTGRES_URL: " KATONIC_POSTGRES_URL
+    echo ""
   fi
 
-  if [[ -n "$REGISTRY" ]]; then
-    # Strip trailing slash for server URL
-    reg_server="${REGISTRY%/}"
-  else
-    reg_server="registry-1.docker.io"
+  # Validate it looks like a postgres URL
+  if [[ ! "$KATONIC_POSTGRES_URL" =~ ^postgres(ql)?:// ]]; then
+    err "KATONIC_POSTGRES_URL must start with postgres:// or postgresql://"
+    exit 1
   fi
 
-  kubectl delete secret dockerhub-secret -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1
+  # Parse host / port / db / user / pass from URL using Python
+  read -r PG_HOST PG_PORT PG_DB PG_USER PG_PASS < <(python3 - "$KATONIC_POSTGRES_URL" <<'PYEOF'
+import sys
+from urllib.parse import urlparse
+u = urlparse(sys.argv[1])
+print(u.hostname, u.port or 5432, u.path.lstrip('/'), u.username or '', u.password or '')
+PYEOF
+  )
+
+  # ── Redis ──
+  if [[ -z "${KATONIC_REDIS_URL:-}" ]]; then
+    echo "Enter Redis URL (default: redis://redis:6379):"
+    read -r _redis
+    KATONIC_REDIS_URL="${_redis:-redis://redis:6379}"
+  fi
+
+  # ── ClickHouse ──
+  if [[ -z "${KATONIC_CLICKHOUSE_PASS:-}" ]]; then
+    read -rsp "ClickHouse password: " KATONIC_CLICKHOUSE_PASS
+    echo ""
+  fi
+
+  # ── DockerHub (for image pull secret) ──
+  if [[ -z "${KATONIC_DOCKERHUB_USER:-}" ]]; then
+    read -rp "DockerHub username: " KATONIC_DOCKERHUB_USER
+  fi
+  if [[ -z "${KATONIC_DOCKERHUB_TOKEN:-}" ]]; then
+    read -rsp "DockerHub token/password: " KATONIC_DOCKERHUB_TOKEN
+    echo ""
+  fi
+
+  # ── Auto-generate crypto secrets ──
+  GATEWAY_FERNET_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null \
+    || python3 -c "import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())")
+  JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+  RC_ENCRYPTION_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+
+  success "Secrets collected."
+}
+
+# ── Namespace + imagePullSecret ───────────────────────────────────────────────
+ensure_namespace() {
+  kubectl get namespace "$NAMESPACE" &>/dev/null || {
+    info "Creating namespace $NAMESPACE..."
+    kubectl create namespace "$NAMESPACE"
+    kubectl label namespace "$NAMESPACE" istio-injection=enabled --overwrite
+  }
+}
+
+create_pull_secret() {
+  info "Creating/updating DockerHub pull secret..."
   kubectl create secret docker-registry dockerhub-secret \
-    -n "$NAMESPACE" \
-    --docker-server="$reg_server" \
-    --docker-username="$reg_user" \
-    --docker-password="$reg_pass"
-
-  info "dockerhub-secret created for server: $reg_server"
-}
-
-# ── Create TLS secret for Istio Gateway ──────────────────────────────────────
-create_tls_secret() {
-  step "Creating / updating kt-certs TLS secret (Istio Gateway)"
-
-  # Check if already exists and not being forced
-  if kubectl get secret kt-certs -n istio-system >/dev/null 2>&1; then
-    info "kt-certs already exists in istio-system — skipping."
-    info "  To replace: kubectl delete secret kt-certs -n istio-system"
-    return
-  fi
-
-  # Find cert/key files
-  if [[ ! -f "$CERT_FILE" || ! -f "$KEY_FILE" ]]; then
-    echo ""
-    warn "TLS certificate files not found at default paths:"
-    warn "  cert: $CERT_FILE"
-    warn "  key:  $KEY_FILE"
-    echo ""
-    echo "  Options:"
-    echo "  1. Place your .crt and .key files in the same directory as this script"
-    echo "     and name them platform.crt and platform.key"
-    echo "  2. Pass paths explicitly: --cert /path/to/cert.crt --key /path/to/key.key"
-    echo "  3. Use a self-signed cert for testing (NOT for production)"
-    echo ""
-    read -rp "  Generate self-signed certificate for testing? [y/N] " ans
-    if [[ "$ans" =~ ^[Yy]$ ]]; then
-      CERT_FILE="/tmp/katonic-selfsigned.crt"
-      KEY_FILE="/tmp/katonic-selfsigned.key"
-      openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "$KEY_FILE" \
-        -out "$CERT_FILE" \
-        -subj "/CN=${DOMAIN}/O=Katonic" \
-        -addext "subjectAltName=DNS:${DOMAIN}" \
-        2>/dev/null
-      warn "Self-signed cert generated. Replace with a real cert for production."
-    else
-      warn "Skipping kt-certs creation. Istio Gateway will not serve HTTPS until this is created."
-      warn "Run when ready:"
-      warn "  kubectl create secret tls kt-certs --cert=<cert.crt> --key=<cert.key> -n istio-system"
-      return
-    fi
-  fi
-
-  kubectl create secret tls kt-certs \
-    --cert="$CERT_FILE" \
-    --key="$KEY_FILE" \
-    -n istio-system
-
-  info "kt-certs TLS secret created in istio-system."
-}
-
-# ── Build Helm --set overrides ────────────────────────────────────────────────
-build_set_args() {
-  local sets=()
-
-  [[ -n "$DOMAIN" ]] && sets+=("--set" "domain=${DOMAIN}")
-
-  if [[ -n "$REGISTRY" ]]; then
-    local services=(adminApi agentApi agentRuntime aiGateway evalEngine
-                    governanceProxy guardrailsEngine knowledgeEngine mcpGateway
-                    modelDeploymentService observability platformBackend
-                    remoteConnections workspaceService)
-    for svc in "${services[@]}"; do
-      local svc_name
-      svc_name=$(echo "$svc" | sed 's/\([A-Z]\)/-\L\1/g' | sed 's/^-//')
-      sets+=("--set" "${svc}.image.repository=${REGISTRY}${svc_name}")
-    done
-    sets+=("--set" "frontend.image.repository=${REGISTRY}katonic-frontend")
-    sets+=("--set" "image.seedAll=${REGISTRY}seed-all:${TAG}")
-  fi
-
-  if [[ "$TAG" != "latest" ]]; then
-    local img_svcs=(adminApi agentApi agentRuntime aiGateway evalEngine
-                    governanceProxy guardrailsEngine knowledgeEngine mcpGateway
-                    modelDeploymentService observability platformBackend
-                    remoteConnections workspaceService)
-    for svc in "${img_svcs[@]}"; do
-      sets+=("--set" "${svc}.image.tag=${TAG}")
-    done
-    sets+=("--set" "frontend.image.tag=${TAG}")
-  fi
-
-  case "$ENV" in
-    dev)
-      sets+=("--set" "global.imagePullPolicy=Always")
-      sets+=("--set" "knowledgeEngine.debug=true")
-      sets+=("--set" "governanceProxy.resources.requests.memory=256Mi")
-      sets+=("--set" "guardrailsEngine.resources.requests.memory=256Mi")
-      ;;
-    staging)
-      sets+=("--set" "global.imagePullPolicy=Always")
-      ;;
-    production)
-      [[ -n "$REGISTRY" ]] && sets+=("--set" "global.imagePullPolicy=Always")
-      ;;
-  esac
-
-  echo "${sets[@]+${sets[@]}}"
-}
-
-# ── Helm lint ─────────────────────────────────────────────────────────────────
-cmd_lint() {
-  step "Linting Helm chart"
-  helm lint "$CHART_DIR" --values "$VALUES_FILE" $DEBUG_FLAG
-  info "Lint passed."
-}
-
-# ── Helm template (dry-run render) ───────────────────────────────────────────
-cmd_template() {
-  step "Rendering templates (dry-run)"
-  local set_args; set_args=$(build_set_args)
-  helm template "$RELEASE_NAME" "$CHART_DIR" \
     --namespace "$NAMESPACE" \
-    --values "$VALUES_FILE" \
-    ${set_args} $DEBUG_FLAG
+    --docker-server=https://index.docker.io/v1/ \
+    --docker-username="$KATONIC_DOCKERHUB_USER" \
+    --docker-password="$KATONIC_DOCKERHUB_TOKEN" \
+    --dry-run=client -o yaml | kubectl apply -f -
 }
 
-# ── Full deploy ───────────────────────────────────────────────────────────────
+# ── platform-config ConfigMap ────────────────────────────────────────────────
+# NOTE: The ConfigMap is now a Helm template (templates/configmap.yaml).
+# This function is kept only for out-of-band updates or pre-Helm bootstrap.
+create_platform_configmap() {
+  info "ConfigMap 'platform-config' is managed by Helm (templates/configmap.yaml)."
+  info "Values flow: --set domain / --set postgres.host|port|db"
+}
+
+# ── platform-secret ───────────────────────────────────────────────────────────
+create_platform_secret() {
+  info "Creating/updating platform-secret..."
+
+  # DATABASE_URL and POSTGRES_URL are the same full DSN
+  # KE_POSTGRES_DSN uses the same DSN (knowledge-engine dialect)
+  kubectl create secret generic platform-secret \
+    --namespace "$NAMESPACE" \
+    --from-literal=POSTGRES_URL="$KATONIC_POSTGRES_URL" \
+    --from-literal=DATABASE_URL="$KATONIC_POSTGRES_URL" \
+    --from-literal=KE_POSTGRES_DSN="$KATONIC_POSTGRES_URL" \
+    --from-literal=REDIS_URL="$KATONIC_REDIS_URL" \
+    --from-literal=KE_REDIS_URL="$KATONIC_REDIS_URL" \
+    --from-literal=CLICKHOUSE_PASSWORD="$KATONIC_CLICKHOUSE_PASS" \
+    --from-literal=CLICKHOUSE_USER="default" \
+    --from-literal=GATEWAY_FERNET_KEY="$GATEWAY_FERNET_KEY" \
+    --from-literal=JWT_SECRET="$JWT_SECRET" \
+    --from-literal=RC_ENCRYPTION_KEY="$RC_ENCRYPTION_KEY" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  success "platform-secret applied."
+}
+
+# ── Install Istio using bundled Helm charts ───────────────────────────────────
+apply_istio_system() {
+  if [[ "$SKIP_ISTIO" == "true" ]]; then
+    info "--skip-istio set; assuming Istio is already installed."
+    return 0
+  fi
+
+  # Validate installer directory exists
+  if [[ ! -d "$ISTIO_INSTALLER_DIR" ]]; then
+    err "Istio installer not found at: $ISTIO_INSTALLER_DIR"
+    err "Expected structure: istio-installer/istio-1.26.0/manifests/charts/"
+    err "Place the istio-1.26.0 folder under istio-installer/ in the repo root."
+    exit 1
+  fi
+
+  local BASE_CHART="${ISTIO_INSTALLER_DIR}/manifests/charts/base"
+  local ISTIOD_CHART="${ISTIO_INSTALLER_DIR}/manifests/charts/istio-control/istio-discovery"
+  local GATEWAY_CHART="${ISTIO_INSTALLER_DIR}/manifests/charts/gateway"
+
+  for chart_path in "$BASE_CHART" "$ISTIOD_CHART" "$GATEWAY_CHART"; do
+    [[ -d "$chart_path" ]] || {
+      err "Required Istio chart not found: $chart_path"
+      exit 1
+    }
+  done
+
+  info "Creating istio-system namespace..."
+  kubectl get namespace istio-system &>/dev/null \
+    || kubectl create namespace istio-system
+
+  # ── 1. Base (CRDs + ValidatingWebhook) ──────────────────────────────────────
+  info "Installing Istio base (CRDs)..."
+  helm upgrade --install istio-base "$BASE_CHART" \
+    --namespace istio-system \
+    --set defaultRevision=default \
+    --wait --timeout 5m
+
+  # ── 2. istiod (control plane) ────────────────────────────────────────────────
+  info "Installing istiod (control plane)..."
+  helm upgrade --install istiod "$ISTIOD_CHART" \
+    --namespace istio-system \
+    --set global.hub="${ISTIO_HUB}" \
+    --set global.tag="${ISTIO_TAG}" \
+    --set global.imagePullPolicy=IfNotPresent \
+    --set pilot.autoscaleEnabled=true \
+    --set pilot.autoscaleMin=1 \
+    --set pilot.autoscaleMax=3 \
+    --wait --timeout 10m
+
+  info "Waiting for istiod rollout..."
+  kubectl rollout status deployment/istiod -n istio-system --timeout=300s || {
+    err "istiod did not become ready within 5 minutes."
+    kubectl get pods -n istio-system
+    exit 1
+  }
+
+  # ── 3. Ingress Gateway ───────────────────────────────────────────────────────
+  info "Installing Istio ingressgateway..."
+  helm upgrade --install istio-ingressgateway "$GATEWAY_CHART" \
+    --namespace istio-system \
+    --set global.hub="${ISTIO_HUB}" \
+    --set global.tag="${ISTIO_TAG}" \
+    --set global.imagePullPolicy=IfNotPresent \
+    --set service.type=LoadBalancer \
+    --set autoscaling.enabled=true \
+    --set autoscaling.minReplicas=1 \
+    --set autoscaling.maxReplicas=5 \
+    --wait --timeout 5m
+
+  # ── Label katonic namespace for sidecar injection ─────────────────────────
+  info "Enabling sidecar injection on namespace ${NAMESPACE}..."
+  kubectl label namespace "${NAMESPACE}" istio-injection=enabled --overwrite 2>/dev/null || true
+
+  success "Istio 1.26.0 installed successfully."
+}
+
+# ── Wait helpers ──────────────────────────────────────────────────────────────
+wait_for_deployment() {
+  local name=$1
+  info "Waiting for deployment/$name ..."
+  kubectl rollout status deployment/"$name" -n "$NAMESPACE" --timeout=300s
+}
+
+run_job_and_wait() {
+  local job_name=$1
+  info "Waiting for job/$job_name ..."
+  kubectl wait --for=condition=complete job/"$job_name" \
+    -n "$NAMESPACE" --timeout=300s 2>/dev/null \
+    || kubectl wait --for=condition=failed job/"$job_name" \
+    -n "$NAMESPACE" --timeout=300s 2>/dev/null \
+    || warn "Job $job_name did not complete within timeout — check logs."
+}
+
+# ── Helm install/upgrade ──────────────────────────────────────────────────────
+run_helm() {
+  [[ -z "$DOMAIN" ]] && { err "--domain is required for deploy/upgrade"; exit 1; }
+
+  local helm_flags=(
+    upgrade --install "$RELEASE" "$CHART_DIR"
+    --namespace "$NAMESPACE"
+    --create-namespace
+    --set "domain=${DOMAIN}"
+    --set "postgres.host=${PG_HOST:-localhost}"
+    --set "postgres.port=${PG_PORT:-5432}"
+    --set "postgres.db=${PG_DB:-platform}"
+    --set "postgres.user=${PG_USER:-postgres}"
+    --atomic
+    --timeout 15m
+  )
+
+  [[ "$DRY_RUN" == "true" ]] && helm_flags+=(--dry-run)
+
+  info "Running: helm ${helm_flags[*]}"
+  helm "${helm_flags[@]}"
+}
+
+# ── Post-deploy checks ────────────────────────────────────────────────────────
+post_deploy_checks() {
+  info "Checking core deployments..."
+  local deps=(admin-api agent-api ai-gateway knowledge-engine katonic-frontend platform-backend)
+  for dep in "${deps[@]}"; do
+    wait_for_deployment "$dep" || warn "Deployment $dep not yet ready — check: kubectl get pods -n $NAMESPACE"
+  done
+
+  info "Waiting for seed-all job..."
+  run_job_and_wait "seed-all" || true
+
+  info "Waiting for migrate-add-starred-chats job..."
+  run_job_and_wait "migrate-add-starred-chats" || true
+}
+
+# ── Commands ──────────────────────────────────────────────────────────────────
 cmd_deploy() {
-  resolve_domain
-  preflight
-  cmd_lint
-
-  # ── Namespace + Istio label ──────────────────────────────────────────────
-  step "Ensuring namespace '$NAMESPACE'"
-  kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-  kubectl label namespace "$NAMESPACE" istio-injection=enabled --overwrite
-
-  # ── Secrets & ConfigMap ──────────────────────────────────────────────────
+  check_prereqs
   collect_secrets
+  ensure_namespace
+  create_pull_secret
   create_platform_secret
-  create_platform_configmap
-  create_registry_secret
-  create_tls_secret
-
-  # ── Helm install/upgrade ─────────────────────────────────────────────────
-  step "Running helm upgrade --install"
-  local set_args; set_args=$(build_set_args)
-  local dry_run_flag=""
-  $DRY_RUN && dry_run_flag="--dry-run=server" && step "DRY RUN — no changes will be applied"
-
-  helm upgrade --install "$RELEASE_NAME" "$CHART_DIR" \
-    --namespace "$NAMESPACE" \
-    --values "$VALUES_FILE" \
-    ${set_args} \
-    --timeout 10m \
-    --atomic \
-    --cleanup-on-fail \
-    --wait \
-    ${dry_run_flag} \
-    $DEBUG_FLAG
-
-  $DRY_RUN && { info "Dry-run complete."; return; }
-
-  # ── Wait for infra ───────────────────────────────────────────────────────
-  step "Waiting for infrastructure StatefulSets"
-  for sts in postgres redis clickhouse; do
-    info "  Waiting for $sts..."
-    kubectl rollout status statefulset/$sts -n "$NAMESPACE" --timeout=240s \
-      || warn "$sts not ready — check: kubectl logs statefulset/$sts -n $NAMESPACE"
-  done
-
-  step "Waiting for Keycloak"
-  kubectl rollout status deployment/keycloak -n "$NAMESPACE" --timeout=300s \
-    || warn "Keycloak not ready yet"
-
-  # ── Seed jobs ────────────────────────────────────────────────────────────
-  local set_args_local; set_args_local=$(build_set_args)
-
-  step "Running seed-keycloak job  (realm + super admin)"
-  kubectl delete job seed-keycloak -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1
-  helm template "$RELEASE_NAME" "$CHART_DIR" \
-    --namespace "$NAMESPACE" --values "$VALUES_FILE" ${set_args_local} \
-    --show-only templates/jobs/seed-keycloak.yaml | kubectl apply -f -
-  kubectl wait --for=condition=complete job/seed-keycloak -n "$NAMESPACE" --timeout=300s \
-    || warn "seed-keycloak timed out — check: kubectl logs job/seed-keycloak -n $NAMESPACE"
-
-  step "Running seed-all job  (platform database)"
-  kubectl delete job seed-all -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1
-  helm template "$RELEASE_NAME" "$CHART_DIR" \
-    --namespace "$NAMESPACE" --values "$VALUES_FILE" ${set_args_local} \
-    --show-only templates/jobs/seed-all.yaml | kubectl apply -f -
-  kubectl wait --for=condition=complete job/seed-all -n "$NAMESPACE" --timeout=300s \
-    || warn "seed-all timed out — check: kubectl logs job/seed-all -n $NAMESPACE"
-
-  step "Running migration job"
-  kubectl delete job migrate-add-starred-chats -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1
-  helm template "$RELEASE_NAME" "$CHART_DIR" \
-    --namespace "$NAMESPACE" --values "$VALUES_FILE" ${set_args_local} \
-    --show-only templates/jobs/migrate-add-starred-chats.yaml | kubectl apply -f -
-  kubectl wait --for=condition=complete job/migrate-add-starred-chats \
-    -n "$NAMESPACE" --timeout=120s || warn "Migration timed out"
-
-  # ── Restart for Istio sidecar injection ─────────────────────────────────
-  step "Restarting deployments (Istio sidecar injection)"
-  kubectl rollout restart deployment -n "$NAMESPACE"
-
-  step "Waiting for all services"
-  local backends=(admin-api agent-api agent-runtime ai-gateway eval-engine
-                  governance-proxy guardrails-engine knowledge-engine mcp-gateway
-                  model-deployment-service observability platform-backend
-                  remote-connections workspace-service katonic-frontend keycloak)
-  for svc in "${backends[@]}"; do
-    kubectl rollout status deployment/$svc -n "$NAMESPACE" --timeout=300s \
-      || warn "$svc not ready yet"
-  done
-
+  apply_istio_system
+  run_helm
+  [[ "$DRY_RUN" == "false" ]] && post_deploy_checks
   echo ""
-  info "✅  Katonic 7.0 deployment complete!"
-  cmd_status
-  cmd_urls
+  success "======================================================"
+  success " Katonic 7.0 deployed successfully!"
+  success " Platform URL: https://${DOMAIN}"
+  success "======================================================"
 }
 
-# ── Upgrade only (skip secret/configmap creation) ────────────────────────────
 cmd_upgrade() {
-  resolve_domain
-  preflight
-  cmd_lint
-  step "Helm upgrade (skipping secret/configmap creation)"
-  local set_args; set_args=$(build_set_args)
-  helm upgrade --install "$RELEASE_NAME" "$CHART_DIR" \
-    --namespace "$NAMESPACE" \
-    --values "$VALUES_FILE" \
-    ${set_args} \
-    --timeout 10m --atomic --cleanup-on-fail --wait \
-    $DEBUG_FLAG
-  info "Upgrade complete."
+  check_prereqs
+  [[ -z "$DOMAIN" ]] && { err "--domain is required"; exit 1; }
+  run_helm
+  [[ "$DRY_RUN" == "false" ]] && post_deploy_checks
 }
 
-# ── Status ────────────────────────────────────────────────────────────────────
+cmd_delete() {
+  warn "This will delete the Helm release '$RELEASE' and namespace '$NAMESPACE'."
+  read -rp "Type 'yes' to confirm: " confirm
+  [[ "$confirm" != "yes" ]] && { info "Aborted."; exit 0; }
+  helm uninstall "$RELEASE" --namespace "$NAMESPACE" 2>/dev/null || true
+  kubectl delete namespace "$NAMESPACE" --ignore-not-found
+  info "Istio system namespace is NOT removed automatically."
+  success "Release deleted."
+}
+
 cmd_status() {
-  step "Release status"
-  helm status "$RELEASE_NAME" -n "$NAMESPACE" 2>/dev/null || warn "Release not found"
-
-  echo ""; info "=== Pods ===";         kubectl get pods        -n "$NAMESPACE" -o wide 2>/dev/null || echo "  (none)"
-  echo ""; info "=== Deployments ===";  kubectl get deployments -n "$NAMESPACE" 2>/dev/null        || echo "  (none)"
-  echo ""; info "=== StatefulSets ==="; kubectl get statefulsets -n "$NAMESPACE" 2>/dev/null       || echo "  (none)"
-  echo ""; info "=== PVCs ===";         kubectl get pvc          -n "$NAMESPACE" 2>/dev/null       || echo "  (none)"
-  echo ""; info "=== Istio ===";
-  kubectl get virtualservices,destinationrules,gateways,peerauthentication \
-    -n "$NAMESPACE" 2>/dev/null || echo "  (none)"
-}
-
-# ── URLs ──────────────────────────────────────────────────────────────────────
-cmd_urls() {
-  local d="${DOMAIN:-$(grep '^domain:' "$VALUES_FILE" | awk '{print $2}' | tr -d '"' || echo 'your-domain')}"
-  step "Platform URLs"
+  info "=== Pods ==="
+  kubectl get pods -n "$NAMESPACE" -o wide
   echo ""
-  echo "  🌐  https://${d}              — Platform home"
-  echo "  💬  https://${d}/ace          — ACE workspace"
-  echo "  🤖  https://${d}/studio/agents — Agent Studio"
-  echo "  📊  https://${d}/dashboard    — Operations Dashboard"
-  echo "  🔑  https://${d}/auth/admin   — Keycloak admin console"
+  info "=== Deployments ==="
+  kubectl get deployments -n "$NAMESPACE"
   echo ""
-
-  local ip=""
-  ip=$(kubectl get svc istio-ingressgateway -n istio-system \
-       -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
-
-  if [[ -n "$ip" ]]; then
-    info "Istio ingress IP: $ip"
-    echo ""
-    echo "  ── DNS record required ──────────────────────────────────────"
-    echo "  Create an A record:"
-    echo "    ${d}  →  ${ip}"
-    echo ""
-    echo "  To test before DNS propagates:"
-    echo "    curl -k --resolve ${d}:443:${ip} https://${d}/healthz"
-    echo "  ─────────────────────────────────────────────────────────────"
-  else
-    # Check if pending — could be on-premise without cloud LB
-    local lb_status
-    lb_status=$(kubectl get svc istio-ingressgateway -n istio-system \
-                -o jsonpath='{.status.loadBalancer.ingress}' 2>/dev/null || true)
-    if [[ -z "$lb_status" ]]; then
-      warn "No LoadBalancer IP assigned to istio-ingressgateway."
-      echo ""
-      echo "  If you are on a bare-metal / on-premise cluster without a cloud"
-      echo "  LoadBalancer, you need MetalLB:"
-      echo ""
-      echo "    helm repo add metallb https://metallb.github.io/metallb"
-      echo "    helm install metallb metallb/metallb -n metallb-system --create-namespace"
-      echo ""
-      echo "  Then configure an IPAddressPool and L2Advertisement for your LAN subnet."
-      echo "  Once MetalLB assigns an IP, re-run:  ./helm-deploy.sh urls"
-    else
-      echo "  Run: kubectl get svc istio-ingressgateway -n istio-system"
-    fi
-  fi
-}
-
-# ── Logs ─────────────────────────────────────────────────────────────────────
-cmd_logs() {
-  [[ -z "$SERVICE" ]] && error "Use --service <name>  e.g. --service admin-api"
-  kubectl logs -n "$NAMESPACE" "deployment/$SERVICE" --tail=150 -f
-}
-
-# ── Diff ─────────────────────────────────────────────────────────────────────
-cmd_diff() {
-  helm plugin list 2>/dev/null | grep -q diff \
-    || error "helm-diff not installed: helm plugin install https://github.com/databus23/helm-diff"
-  resolve_domain
-  local set_args; set_args=$(build_set_args)
-  helm diff upgrade "$RELEASE_NAME" "$CHART_DIR" \
-    --namespace "$NAMESPACE" --values "$VALUES_FILE" ${set_args} $DEBUG_FLAG
-}
-
-# ── Restart ───────────────────────────────────────────────────────────────────
-cmd_restart() {
-  step "Rolling restart of all deployments in '$NAMESPACE'"
-  kubectl rollout restart deployment -n "$NAMESPACE"
-  info "Restart triggered. Watch: kubectl get pods -n $NAMESPACE -w"
-}
-
-# ── Uninstall ─────────────────────────────────────────────────────────────────
-cmd_uninstall() {
-  warn "This removes the Helm release '$RELEASE_NAME' but KEEPS PVCs (data safe)."
-  read -rp "Continue? [y/N] " ans
-  [[ "$ans" =~ ^[Yy]$ ]] || { info "Cancelled."; exit 0; }
-  helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" $DEBUG_FLAG || true
-  info "Release removed. PVCs retained."
-}
-
-# ── Purge ─────────────────────────────────────────────────────────────────────
-cmd_purge() {
-  warn "⚠️  DESTRUCTIVE — removes the release AND deletes all PVCs (all data lost)."
-  read -rp "Type 'yes-delete-everything' to confirm: " ans
-  [[ "$ans" == "yes-delete-everything" ]] || { info "Cancelled."; exit 0; }
-  helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" $DEBUG_FLAG || true
-  kubectl delete pvc --all -n "$NAMESPACE" || true
-  kubectl delete namespace "$NAMESPACE" --timeout=60s || true
-  info "Purge complete."
-}
-
-# ── Help ──────────────────────────────────────────────────────────────────────
-cmd_help() {
-  cat <<EOF
-
-${BOLD}Katonic 7.0 — Helm Deploy Script${NC}
-
-${BOLD}USAGE${NC}
-  $0 <command> [options]
-
-${BOLD}COMMANDS${NC}
-  deploy      Full install:  creates secrets/configmap → Helm install → seed jobs
-  upgrade     Helm upgrade only  (secrets/configmap already exist)
-  template    Render all manifests to stdout  (no cluster needed)
-  lint        Lint the Helm chart
-  diff        What would change vs current release  (needs helm-diff plugin)
-  status      Pods, deployments, PVCs, Istio resources
-  logs        Tail logs for a service  (--service <name>)
-  urls        Show platform URLs and DNS instructions
-  restart     Rolling restart all deployments
-  uninstall   Remove Helm release, keep PVCs
-  purge       Remove Helm release + delete all PVCs  ⚠ DESTRUCTIVE
-
-${BOLD}OPTIONS${NC}
-  --domain     Platform domain  e.g. platform.mycompany.com  [REQUIRED for deploy]
-  --env        dev | staging | production  (default: production)
-  --registry   Image registry prefix  e.g. "katonic.azurecr.io/"
-  --tag        Image tag  (default: latest)
-  --cert       TLS certificate .crt file  (default: ./platform.crt)
-  --key        TLS private key .key file  (default: ./platform.key)
-  --dry-run    Helm server dry-run — no changes applied
-  --debug      Verbose Helm output
-  --service    Service name for the logs command
-
-${BOLD}CI/CD ENV VARS  (skip interactive prompts)${NC}
-  KATONIC_DB_PASSWORD        Postgres password
-  KATONIC_CLICKHOUSE_PASS    ClickHouse password
-  KATONIC_KC_ADMIN_PASS      Keycloak bootstrap admin password
-  KATONIC_KC_CLIENT_SECRET   Keycloak client secret
-  KATONIC_ADMIN_EMAIL        Platform super-admin email
-  KATONIC_ADMIN_PASSWORD     Platform super-admin password
-  KATONIC_REGISTRY_USER      Registry username
-  KATONIC_REGISTRY_PASS      Registry password
-  KATONIC_SMTP_PASS          SMTP password  (only if smtp.enabled=true)
-
-${BOLD}EXAMPLES${NC}
-
-  # First deploy — prompts for all credentials
-  $0 deploy --domain platform.mycompany.com --env production
-
-  # Deploy with ACR images at a specific tag + TLS cert
-  $0 deploy --domain platform.mycompany.com \\
-            --registry katonic.azurecr.io/ --tag v7.0.1 \\
-            --cert ./certs/platform.crt --key ./certs/platform.key
-
-  # CI/CD pipeline  (no prompts)
-  export KATONIC_DB_PASSWORD="\$DB_PASS"
-  export KATONIC_CLICKHOUSE_PASS="\$CH_PASS"
-  export KATONIC_KC_ADMIN_PASS="\$KC_PASS"
-  export KATONIC_KC_CLIENT_SECRET="\$KC_SECRET"
-  export KATONIC_ADMIN_EMAIL="admin@mycompany.com"
-  export KATONIC_ADMIN_PASSWORD="\$ADMIN_PASS"
-  export KATONIC_REGISTRY_USER="\$REG_USER"
-  export KATONIC_REGISTRY_PASS="\$REG_PASS"
-  $0 deploy --domain platform.mycompany.com \\
-            --registry katonic.azurecr.io/ --tag \$BUILD_TAG
-
-  # Preview render output
-  $0 template --domain platform.mycompany.com > /tmp/rendered.yaml
-
-  # Show what a tag bump would change
-  $0 diff --domain platform.mycompany.com --tag v7.0.2
-
-  # Tail logs
-  $0 logs --service governance-proxy
-
-  # Remove platform (keep data)
-  $0 uninstall
-
-EOF
+  info "=== Jobs ==="
+  kubectl get jobs -n "$NAMESPACE"
+  echo ""
+  info "=== Istio Gateway ==="
+  kubectl get svc istio-ingressgateway -n istio-system 2>/dev/null || warn "Istio ingressgateway not found"
 }
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 case "$COMMAND" in
-  deploy)    cmd_deploy    ;;
-  upgrade)   cmd_upgrade   ;;
-  template)  cmd_template  ;;
-  lint)      cmd_lint      ;;
-  diff)      cmd_diff      ;;
-  status)    cmd_status    ;;
-  logs)      cmd_logs      ;;
-  urls)      cmd_urls      ;;
-  restart)   cmd_restart   ;;
-  uninstall) cmd_uninstall ;;
-  purge)     cmd_purge     ;;
-  help|--help|-h) cmd_help ;;
-  *) error "Unknown command '$COMMAND'. Run '$0 help'." ;;
+  deploy)  cmd_deploy  ;;
+  upgrade) cmd_upgrade ;;
+  delete)  cmd_delete  ;;
+  status)  cmd_status  ;;
 esac
+
+

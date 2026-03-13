@@ -1,3 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.guardrailsEngine.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.guardrailsEngine.name }}
+spec:
+  replicas: {{ .Values.guardrailsEngine.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.guardrailsEngine.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.guardrailsEngine.name }}
+    spec:
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      containers:
+        - name: {{ .Values.guardrailsEngine.name }}
+          image: {{ .Values.imageRegistry }}{{ .Values.guardrailsEngine.image.repository }}:{{ .Values.guardrailsEngine.image.tag }}
+          imagePullPolicy: {{ .Values.guardrailsEngine.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.guardrailsEngine.containerPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.global.configMap }}
+            - secretRef:
+                name: {{ .Values.global.secret }}
+          resources:
+            {{- toYaml .Values.guardrailsEngine.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.guardrailsEngine.containerPort }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.guardrailsEngine.containerPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
 ---
 apiVersion: v1
 kind: Service
@@ -10,131 +57,8 @@ spec:
   selector:
     app: {{ .Values.guardrailsEngine.name }}
   ports:
-    - name: http-api
-      port: {{ .Values.guardrailsEngine.service.port }}
+    - port: {{ .Values.guardrailsEngine.service.port }}
       targetPort: {{ .Values.guardrailsEngine.service.targetPort }}
+      protocol: TCP
 
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .Values.guardrailsEngine.name }}
-  namespace: {{ .Values.global.namespace }}
-spec:
-  replicas: {{ .Values.guardrailsEngine.replicas }}
-  selector:
-    matchLabels:
-      app: {{ .Values.guardrailsEngine.name }}
-  template:
-    metadata:
-      labels:
-        app: {{ .Values.guardrailsEngine.name }}
-    spec:
-      enableServiceLinks: false
 
-      imagePullSecrets:
-        - name: {{ .Values.global.imagePullSecret }}
-
-      containers:
-        - name: {{ .Values.guardrailsEngine.name }}
-
-          image: "{{ .Values.guardrailsEngine.image.repository }}:{{ .Values.guardrailsEngine.image.tag }}"
-          imagePullPolicy: {{ .Values.guardrailsEngine.image.pullPolicy }}
-
-          ports:
-            - containerPort: {{ .Values.guardrailsEngine.containerPort }}
-
-          env:
-            - name: PLATFORM_ENVIRONMENT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: PLATFORM_ENVIRONMENT
-
-            - name: PLATFORM_SERVICE_NAME
-              value: "guardrails-engine"
-
-            - name: CLICKHOUSE_HOST
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: CLICKHOUSE_HOST
-
-            - name: CLICKHOUSE_PORT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: CLICKHOUSE_PORT
-
-            - name: CLICKHOUSE_DATABASE
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: CLICKHOUSE_DATABASE
-
-            - name: AI_GATEWAY_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: AI_GATEWAY_URL
-
-            - name: OTEL_ENABLED
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: OTEL_ENABLED
-
-            # Keycloak
-            - name: KEYCLOAK_SERVER_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_SERVER_URL
-            - name: KEYCLOAK_REALM
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_REALM
-            - name: KEYCLOAK_AUDIENCE
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_AUDIENCE
-            - name: KEYCLOAK_ISSUER
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_ISSUER
-
-          resources:
-            requests:
-              cpu: {{ .Values.guardrailsEngine.resources.requests.cpu }}
-              memory: {{ .Values.guardrailsEngine.resources.requests.memory }}
-            limits:
-              cpu: {{ .Values.guardrailsEngine.resources.limits.cpu }}
-              memory: {{ .Values.guardrailsEngine.resources.limits.memory }}
-
-          startupProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.guardrailsEngine.containerPort }}
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 60
-
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.guardrailsEngine.containerPort }}
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.guardrailsEngine.containerPort }}
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 5

@@ -1,5 +1,4 @@
----
-apiVersion: networking.istio.io/v1
+apiVersion: networking.istio.io/v1beta1
 kind: Gateway
 metadata:
   name: {{ .Values.gateway.name }}
@@ -8,26 +7,30 @@ spec:
   selector:
     istio: {{ .Values.gateway.selector }}
   servers:
-    {{- range .Values.gateway.servers }}
-    - hosts:
-        - {{ $.Values.domain }}
-      port:
-        name: {{ .port.name }}
-        number: {{ .port.number }}
-        protocol: {{ .port.protocol }}
-      {{- if .tls }}
+    - port:
+        name: https
+        number: 443
+        protocol: HTTPS
       tls:
-        {{- if .tls.httpsRedirect }}
-        httpsRedirect: {{ .tls.httpsRedirect }}
-        {{- else }}
-        mode: {{ .tls.mode }}
-        credentialName: {{ .tls.credentialName }}
-        minProtocolVersion: {{ .tls.minProtocolVersion }}
-        maxProtocolVersion: {{ .tls.maxProtocolVersion }}
         cipherSuites:
-          {{- range .tls.cipherSuites }}
-          - {{ . }}
-          {{- end }}
-        {{- end }}
-      {{- end }}
-    {{- end }}
+          - ECDHE-ECDSA-AES128-GCM-SHA256
+          - ECDHE-ECDSA-AES256-GCM-SHA384
+          - ECDHE-RSA-AES128-GCM-SHA256
+          - ECDHE-RSA-AES256-GCM-SHA384
+          - ECDHE-RSA-CHACHA20-POLY1305
+        credentialName: kt-certs
+        maxProtocolVersion: TLSV1_3
+        minProtocolVersion: TLSV1_2
+        mode: SIMPLE
+      hosts:
+        - {{ .Values.domain | quote }}
+    - port:
+        name: http
+        number: 80
+        protocol: HTTP
+      tls:
+        httpsRedirect: true
+      hosts:
+        - {{ .Values.domain | quote }}
+
+

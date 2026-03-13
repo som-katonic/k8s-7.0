@@ -38,27 +38,9 @@ environment: production
 # Flows into:
 #   Istio Gateway hosts
 #   Istio VirtualService (gateway host)
-#   Istio RequestAuthentication issuer URL
-#   Keycloak --hostname arg
-#   platform-config ConfigMap  (KEYCLOAK_ISSUER, KEYCLOAK_SERVER_URL)
-#   seed-keycloak redirect URIs
+#   platform-config ConfigMap  (PLATFORM_DOMAIN)
 # -----------------------------------------------------------------------------
 domain: "preview.katonic.ai"
-
-# -----------------------------------------------------------------------------
-# Super-admin user  (created in Keycloak by seed-keycloak job)
-# Password is NEVER stored here — collected by helm-deploy.sh at deploy time
-# and written into platform-secret (key: KATONIC_ADMIN_PASSWORD).
-# Override email: --set superAdmin.email=you@yourcompany.com
-# -----------------------------------------------------------------------------
-superAdmin:
-  email: "admin@katonic.ai"
-  firstName: "Platform"
-  lastName: "Admin"
-  tenantId: "default"
-  teams: "engineering,platform"
-  department: "Engineering"
-  role: "platform_admin"
 
 # -----------------------------------------------------------------------------
 # Image registry
@@ -76,14 +58,12 @@ resourceQuota:
   storage: "512Gi"
 
 # -----------------------------------------------------------------------------
-# Workspace timeout (hours) — passed to workspace-service as env var
+# Workspace timeout (hours)
 # -----------------------------------------------------------------------------
 workspaceTimeoutHours: "12"
 
 # -----------------------------------------------------------------------------
 # SMTP
-# Set enabled: true and fill in values to use your own mail server.
-# When enabled: false the platform uses Katonic's default SendGrid.
 # -----------------------------------------------------------------------------
 smtp:
   enabled: false
@@ -93,8 +73,30 @@ smtp:
   from: "support@katonic.ai"
   ssl: true
   auth: true
-  # Password is collected by helm-deploy.sh and stored in platform-secret
-  # under key SMTP_PASSWORD — never stored here.
+
+# -----------------------------------------------------------------------------
+# PostgreSQL — EXTERNAL.
+# The full URL is stored in platform-secret (key: POSTGRES_URL).
+# These values are parsed by helm-deploy.sh from the URL and injected via
+# --set so the ConfigMap template can render static host/port/db.
+# -----------------------------------------------------------------------------
+postgres:
+  host: "localhost"
+  port: "5432"
+  db: "platform"
+  user: "postgres"
+
+# -----------------------------------------------------------------------------
+# Istio pre-install job
+# When istio.enabled=true, a pre-install Helm hook runs istioctl inside
+# the cluster to install Istio before any application resources are created.
+# Set to false if Istio is already installed on the target cluster.
+# -----------------------------------------------------------------------------
+istio:
+  enabled: false
+  image: "docker.io/istio/istioctl:1.26.0"
+  imageRegistry: ""
+  pilotImage: "docker.io/istio/pilot:1.26.0"
 
 # -----------------------------------------------------------------------------
 # Backend services
@@ -253,9 +255,7 @@ knowledgeEngine:
   permissions:
     failClosed: "false"
   auth:
-    enabled: "true"
-    jwksUrl: "http://keycloak.katonic.svc.cluster.local:8080/auth/realms/platform/protocol/openid-connect/certs"
-    audience: "platform-api"
+    enabled: "false"
   resources:
     requests:
       cpu: 200m
@@ -414,7 +414,6 @@ frontend:
   service:
     port: 3000
     targetPort: 3000
-  imagePullSecret: dockerhub-secret
   resources:
     requests:
       cpu: 50m
@@ -435,91 +434,9 @@ frontend:
     failureThreshold: 5
 
 # -----------------------------------------------------------------------------
-# Infrastructure
+# Infrastructure — ClickHouse + Redis only (Postgres is external)
 # -----------------------------------------------------------------------------
 infra:
-
-  postgres:
-    namespace: katonic
-    service:
-      name: postgres
-      selector: postgres
-      port: 5432
-      targetPort: 5432
-    configMap:
-      name: postgres-init
-      initSQL: |
-        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-        CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-        CREATE EXTENSION IF NOT EXISTS "pg_trgm";
-        REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-        REVOKE ALL ON DATABASE platform FROM PUBLIC;
-        DO $$ BEGIN
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_admin') THEN
-            CREATE ROLE svc_admin LOGIN PASSWORD 'change_me_admin';
-          END IF;
-        END $$;
-        GRANT CONNECT ON DATABASE platform TO svc_admin;
-        GRANT USAGE ON SCHEMA public TO svc_admin;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO svc_admin;
-        DO $$ BEGIN
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_observability') THEN
-            CREATE ROLE svc_observability LOGIN PASSWORD 'change_me_obs';
-          END IF;
-        END $$;
-        GRANT CONNECT ON DATABASE platform TO svc_observability;
-        GRANT USAGE ON SCHEMA public TO svc_observability;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO svc_observability;
-        GRANT USAGE ON SCHEMA public TO platform;
-        CREATE DATABASE keycloak OWNER platform;
-        REVOKE ALL ON DATABASE keycloak FROM PUBLIC;
-        CREATE DATABASE knowledge_engine OWNER platform;
-        REVOKE ALL ON DATABASE knowledge_engine FROM PUBLIC;
-        DO $$ BEGIN
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_knowledge') THEN
-            CREATE ROLE svc_knowledge LOGIN PASSWORD 'change_me_ke';
-          END IF;
-        END $$;
-        GRANT CONNECT ON DATABASE knowledge_engine TO svc_knowledge;
-    statefulSet:
-      name: postgres
-      serviceName: postgres
-      replicas: 1
-      selector: postgres
-      sidecarInject: "false"
-      container:
-        image: postgres:16-alpine
-        port: 5432
-        db: platform
-        dbUser: platform
-        mountPath: /var/lib/postgresql/data
-        pgdata: /var/lib/postgresql/data/pgdata
-      resources:
-        requests:
-          cpu: 100m
-          memory: 256Mi
-        limits:
-          cpu: 500m
-          memory: 1Gi
-      volume:
-        storage: 5Gi
-    secrets:
-      user:
-        name: platform-secret
-        key: POSTGRES_USER
-      password:
-        name: platform-secret
-        key: POSTGRES_PASSWORD
-    probes:
-      startup:
-        failureThreshold: 30
-        periodSeconds: 10
-        timeoutSeconds: 3
-      readiness:
-        periodSeconds: 5
-      liveness:
-        periodSeconds: 10
-        failureThreshold: 5
 
   redis:
     namespace: katonic
@@ -600,64 +517,8 @@ infra:
       CREATE TABLE IF NOT EXISTS governance_tool_events (event_id String, timestamp DateTime64(3), tenant_id String DEFAULT 'default', user_id String DEFAULT '', team_id String DEFAULT '', agent_id String DEFAULT '', session_id String DEFAULT '', server_name String DEFAULT '', tool_name String DEFAULT '', risk_level String DEFAULT 'low', decision String DEFAULT 'allow', policy_ids String DEFAULT '', pii_detected UInt8 DEFAULT 0, pii_entity_count UInt32 DEFAULT 0, pii_entity_types String DEFAULT '', output_redacted UInt8 DEFAULT 0, latency_ms UInt32 DEFAULT 0, error String DEFAULT '') ENGINE = MergeTree() PARTITION BY toYYYYMM(timestamp) ORDER BY (tenant_id, timestamp, event_id) TTL toDateTime(timestamp) + INTERVAL 365 DAY SETTINGS index_granularity = 8192;
       CREATE MATERIALIZED VIEW IF NOT EXISTS mv_llm_hourly_stats ENGINE = SummingMergeTree() PARTITION BY toYYYYMM(hour) ORDER BY (tenant_id, hour, tier, provider) AS SELECT toStartOfHour(timestamp) AS hour, tenant_id, tier, provider, count() AS requests, sum(tokens_input) AS input_tokens, sum(tokens_output) AS output_tokens, sum(cost_usd) AS cost_usd, sum(latency_ms) AS total_latency_ms, countIf(status = 'error') AS errors FROM llm_usage_events GROUP BY hour, tenant_id, tier, provider;
 
-  keycloak:
-    namespace: katonic
-    replicaCount: 1
-    image:
-      repository: quay.io/keycloak/keycloak
-      tag: "26.0"
-      pullPolicy: IfNotPresent
-    ports:
-      http: 8080
-      management: 9000
-    service:
-      name: keycloak
-      type: ClusterIP
-    resources:
-      requests:
-        cpu: 250m
-        memory: 512Mi
-      limits:
-        cpu: "1"
-        memory: 1Gi
-    configMapName: platform-config
-    secretName: platform-secret
-    keycloak:
-      dbName: keycloak
-      dbSchema: public
-      hostnameStrict: "false"
-      httpEnabled: "true"
-      httpRelativePath: "/auth"
-      proxyHeaders: "xforwarded"
-      healthEnabled: "true"
-      metricsEnabled: "true"
-
-  modelCache:
-    namespace: katonic
-    pvc:
-      name: model-cache
-      accessMode: ReadWriteMany
-      storageClassName: azurefile-nfs
-      storage: 50Gi
-    labels:
-      partOf: katonic-platform
-      component: model-cache
-    storageClass:
-      name: azurefile-nfs
-      provisioner: file.csi.azure.com
-      parameters:
-        protocol: nfs
-        skuName: Premium_LRS
-      reclaimPolicy: Retain
-      volumeBindingMode: Immediate
-      allowVolumeExpansion: true
-      mountOptions:
-        - nconnect=4
-        - hard
-        - noresvport
-
 # -----------------------------------------------------------------------------
-# Istio — all domain references injected from .Values.domain
+# Istio mesh config
 # -----------------------------------------------------------------------------
 gateway:
   name: kt-gateway
@@ -690,20 +551,6 @@ peerAuth:
   - name: katonic-default
     namespace: katonic
     mtlsMode: PERMISSIVE
-  - name: keycloak-permissive
-    namespace: katonic
-    selector:
-      app: keycloak
-    mtlsMode: PERMISSIVE
-
-requestAuth:
-  name: keycloak-jwt
-  namespace: katonic
-  forwardOriginalToken: true
-  audiences:
-    - "account"
-    - "platform-api"
-    - "platform-ui"
 
 destinationRules:
   - name: admin-api
@@ -908,19 +755,7 @@ destinationRules:
       interval: 30s
       baseEjectionTime: 30s
       maxEjectionPercent: 50
-  - name: keycloak
-    host: keycloak
-    tlsMode: ISTIO_MUTUAL
-    connectionPool:
-      http:
-        maxRequestsPerConnection: 100
-      tcp:
-        maxConnections: 100
-    outlierDetection:
-      consecutive5xxErrors: 5
-      interval: 30s
-      baseEjectionTime: 30s
-      maxEjectionPercent: 50
+  # Infrastructure: DISABLE mTLS (no sidecars)
   - name: postgres
     host: postgres
     tlsMode: DISABLE
@@ -931,21 +766,9 @@ destinationRules:
     host: clickhouse
     tlsMode: DISABLE
 
-jwtPublicPaths:
-  - "/health*"
-  - "/ready*"
-  - "/metrics*"
-  - "/docs*"
-  - "/openapi.json"
-  - "/redoc"
-  - "/healthz"
-  - "/v1/health/*"
-
 allowAllApps:
   - name: frontend
     app: katonic-frontend
-  - name: keycloak
-    app: keycloak
   - name: platform-backend
     app: platform-backend
 
@@ -1000,15 +823,7 @@ job:
 image:
   postgres: "postgres:16-alpine"
   seedAll: "katonic/seed-all:latest"
-  waitCurl: "curlimages/curl:8.5.0"
-  seed: "python:3.12-slim"
   pullPolicy: Always
-
-postgres:
-  host: postgres
-  port: 5432
-  db: platform
-  user: platform
 
 milvus:
   uri: "http://milvus:19530"
@@ -1026,8 +841,4 @@ resources:
     cpu: 500m
     memory: 512Mi
 
-keycloak:
-  url: "http://keycloak:8080/auth"
-  adminUserSecret: KEYCLOAK_ADMIN_USER
-  adminPassSecret: KEYCLOAK_ADMIN_PASSWORD
-  clientSecretSecret: KEYCLOAK_CLIENT_SECRET
+

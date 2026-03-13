@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.global.configMap }}
+  namespace: {{ .Values.global.namespace }}
+data:
+  # ── Environment ──
+  PLATFORM_ENVIRONMENT: {{ .Values.environment | quote }}
+  PLATFORM_DOMAIN:      {{ .Values.domain | quote }}
+  OTEL_ENABLED:         "false"
+
+  # ── PostgreSQL (external) ──
+  # Host/port/db are parsed from the URL by helm-deploy.sh and passed via --set.
+  POSTGRES_HOST: {{ .Values.postgres.host | quote }}
+  POSTGRES_PORT: {{ .Values.postgres.port | quote }}
+  POSTGRES_DB:   {{ .Values.postgres.db | quote }}
+
+  # ── Redis ──
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+
+  # ── ClickHouse ──
+  CLICKHOUSE_HOST:     "clickhouse"
+  CLICKHOUSE_PORT:     "8123"
+  CLICKHOUSE_DATABASE: "platform"
+
+  # ── Internal Service URLs ──
+  ADMIN_API_URL:          "http://admin-api:8000"
+  OBSERVABILITY_URL:      "http://observability:8000"
+  GUARDRAILS_URL:         "http://guardrails-engine:8000"
+  GOVERNANCE_URL:         "http://governance-proxy:8000"
+  AGENT_API_URL:          "http://agent-api:8000"
+  AGENT_RUNTIME_URL:      "http://agent-runtime:8000"
+  MCP_GATEWAY_URL:        "http://mcp-gateway:8009"
+  AI_GATEWAY_URL:         "http://ai-gateway:8010"
+  KNOWLEDGE_ENGINE_URL:   "http://knowledge-engine:8011"
+  MODEL_DEPLOY_URL:       "http://model-deployment-service:8012"
+  WORKSPACE_SERVICE_URL:  "http://workspace-service:8013"
+  REMOTE_CONNECTIONS_URL: "http://remote-connections:8014"
+  PLATFORM_BACKEND_URL:   "http://platform-backend:3002"
+  MARKETPLACE_URL:        "http://admin-api:8000"
+  EVAL_ENGINE_URL:        "http://eval-engine:8015"
+
+  # ── Optional: Milvus ──
+  MILVUS_URI:      "http://milvus:19530"
+  MINIO_ENDPOINT:  "http://minio:9000"
+
+  # ── Workspace ──
+  WORKSPACE_TIMEOUT_HOURS: {{ .Values.workspaceTimeoutHours | quote }}
+
+  # ── SMTP ──
+  SMTP_ENABLED: {{ .Values.smtp.enabled | quote }}
+  SMTP_HOST:    {{ .Values.smtp.host | quote }}
+  SMTP_PORT:    {{ .Values.smtp.port | quote }}
+  SMTP_USER:    {{ .Values.smtp.user | quote }}
+  SMTP_FROM:    {{ .Values.smtp.from | quote }}
+  SMTP_SSL:     {{ .Values.smtp.ssl | quote }}
+  SMTP_AUTH:    {{ .Values.smtp.auth | quote }}
+
+

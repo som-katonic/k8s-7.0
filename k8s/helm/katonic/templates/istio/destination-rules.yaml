@@ -4,25 +4,33 @@ apiVersion: networking.istio.io/v1beta1
 kind: DestinationRule
 metadata:
   name: {{ .name }}
-  namespace: {{ $.Values.namespace }}
+  namespace: {{ $.Values.global.namespace }}
 spec:
-  host: {{ .host }}.{{ $.Values.namespace }}.svc.cluster.local
+  host: {{ .host }}
   trafficPolicy:
     tls:
       mode: {{ .tlsMode }}
+    {{- if or .connectionPool .outlierDetection }}
     {{- if .connectionPool }}
     connectionPool:
+      {{- if .connectionPool.http }}
       http:
-        h2UpgradePolicy: DEFAULT
+        {{- if .connectionPool.http.maxRequestsPerConnection }}
         maxRequestsPerConnection: {{ .connectionPool.http.maxRequestsPerConnection }}
+        {{- end }}
         {{- if .connectionPool.http.idleTimeout }}
         idleTimeout: {{ .connectionPool.http.idleTimeout }}
         {{- end }}
+      {{- end }}
+      {{- if .connectionPool.tcp }}
       tcp:
+        {{- if .connectionPool.tcp.maxConnections }}
         maxConnections: {{ .connectionPool.tcp.maxConnections }}
+        {{- end }}
         {{- if .connectionPool.tcp.connectTimeout }}
         connectTimeout: {{ .connectionPool.tcp.connectTimeout }}
         {{- end }}
+      {{- end }}
     {{- end }}
     {{- if .outlierDetection }}
     outlierDetection:
@@ -31,4 +39,7 @@ spec:
       baseEjectionTime: {{ .outlierDetection.baseEjectionTime }}
       maxEjectionPercent: {{ .outlierDetection.maxEjectionPercent }}
     {{- end }}
+    {{- end }}
 {{- end }}
+
+

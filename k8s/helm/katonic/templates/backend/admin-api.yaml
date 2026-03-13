@@ -1,3 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.adminApi.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.adminApi.name }}
+spec:
+  replicas: {{ .Values.adminApi.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.adminApi.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.adminApi.name }}
+    spec:
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      containers:
+        - name: {{ .Values.adminApi.name }}
+          image: {{ .Values.imageRegistry }}{{ .Values.adminApi.image.repository }}:{{ .Values.adminApi.image.tag }}
+          imagePullPolicy: {{ .Values.adminApi.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.adminApi.containerPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.global.configMap }}
+            - secretRef:
+                name: {{ .Values.global.secret }}
+          resources:
+            {{- toYaml .Values.adminApi.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.adminApi.containerPort }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.adminApi.containerPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
 ---
 apiVersion: v1
 kind: Service
@@ -10,159 +57,8 @@ spec:
   selector:
     app: {{ .Values.adminApi.name }}
   ports:
-    - name: http-api
-      port: {{ .Values.adminApi.service.port }}
+    - port: {{ .Values.adminApi.service.port }}
       targetPort: {{ .Values.adminApi.service.targetPort }}
+      protocol: TCP
 
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .Values.adminApi.name }}
-  namespace: {{ .Values.global.namespace }}
-spec:
-  replicas: {{ .Values.adminApi.replicas }}
-  selector:
-    matchLabels:
-      app: {{ .Values.adminApi.name }}
-  template:
-    metadata:
-      labels:
-        app: {{ .Values.adminApi.name }}
-    spec:
-      enableServiceLinks: false
 
-      imagePullSecrets:
-        - name: {{ .Values.global.imagePullSecret }}
-
-      containers:
-        - name: {{ .Values.adminApi.name }}
-
-          image: "{{ .Values.adminApi.image.repository }}:{{ .Values.adminApi.image.tag }}"
-          imagePullPolicy: {{ .Values.adminApi.image.pullPolicy }}
-
-          ports:
-            - containerPort: {{ .Values.adminApi.containerPort }}
-
-          env:
-
-            - name: ADMIN_ENVIRONMENT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: PLATFORM_ENVIRONMENT
-
-            - name: ADMIN_POSTGRES_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: POSTGRES_URL
-
-            - name: ADMIN_REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: REDIS_URL
-
-            - name: ADMIN_AI_GATEWAY_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: AI_GATEWAY_URL
-
-            - name: ADMIN_GUARDRAILS_ENGINE_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: GUARDRAILS_URL
-
-            - name: ADMIN_GOVERNANCE_PROXY_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: GOVERNANCE_URL
-
-            - name: ADMIN_KNOWLEDGE_ENGINE_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KNOWLEDGE_ENGINE_URL
-
-            - name: ADMIN_MCP_GATEWAY_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: MCP_GATEWAY_URL
-
-            - name: ADMIN_MODEL_SERVING_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: MODEL_DEPLOY_URL
-
-            - name: ADMIN_MARKETPLACE_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: MARKETPLACE_URL
-
-            - name: OTEL_ENABLED
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: OTEL_ENABLED
-
-            # Keycloak
-
-            - name: KEYCLOAK_SERVER_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_SERVER_URL
-
-            - name: KEYCLOAK_REALM
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_REALM
-
-            - name: KEYCLOAK_AUDIENCE
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_AUDIENCE
-
-            - name: KEYCLOAK_ISSUER
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_ISSUER
-
-          resources:
-            requests:
-              cpu: {{ .Values.adminApi.resources.requests.cpu }}
-              memory: {{ .Values.adminApi.resources.requests.memory }}
-            limits:
-              cpu: {{ .Values.adminApi.resources.limits.cpu }}
-              memory: {{ .Values.adminApi.resources.limits.memory }}
-
-          startupProbe:
-            httpGet:
-              path: /v1/health
-              port: {{ .Values.adminApi.containerPort }}
-            failureThreshold: 30
-            periodSeconds: 10
-            timeoutSeconds: 3
-
-          readinessProbe:
-            httpGet:
-              path: /v1/health
-              port: {{ .Values.adminApi.containerPort }}
-            periodSeconds: 10
-
-          livenessProbe:
-            httpGet:
-              path: /v1/health
-              port: {{ .Values.adminApi.containerPort }}
-            periodSeconds: 15
-            failureThreshold: 5

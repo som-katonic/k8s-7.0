@@ -1,3 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.aiGateway.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.aiGateway.name }}
+spec:
+  replicas: {{ .Values.aiGateway.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.aiGateway.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.aiGateway.name }}
+    spec:
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      containers:
+        - name: {{ .Values.aiGateway.name }}
+          image: {{ .Values.imageRegistry }}{{ .Values.aiGateway.image.repository }}:{{ .Values.aiGateway.image.tag }}
+          imagePullPolicy: {{ .Values.aiGateway.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.aiGateway.containerPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.global.configMap }}
+            - secretRef:
+                name: {{ .Values.global.secret }}
+          resources:
+            {{- toYaml .Values.aiGateway.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.aiGateway.containerPort }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.aiGateway.containerPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
 ---
 apiVersion: v1
 kind: Service
@@ -10,142 +57,8 @@ spec:
   selector:
     app: {{ .Values.aiGateway.name }}
   ports:
-    - name: http-api
-      port: {{ .Values.aiGateway.service.port }}
+    - port: {{ .Values.aiGateway.service.port }}
       targetPort: {{ .Values.aiGateway.service.targetPort }}
+      protocol: TCP
 
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .Values.aiGateway.name }}
-  namespace: {{ .Values.global.namespace }}
-spec:
-  replicas: {{ .Values.aiGateway.replicas }}
-  selector:
-    matchLabels:
-      app: {{ .Values.aiGateway.name }}
-  template:
-    metadata:
-      labels:
-        app: {{ .Values.aiGateway.name }}
-    spec:
-      enableServiceLinks: false
 
-      imagePullSecrets:
-        - name: {{ .Values.global.imagePullSecret }}
-
-      containers:
-        - name: {{ .Values.aiGateway.name }}
-
-          image: "{{ .Values.aiGateway.image.repository }}:{{ .Values.aiGateway.image.tag }}"
-          imagePullPolicy: {{ .Values.aiGateway.image.pullPolicy }}
-
-          ports:
-            - containerPort: {{ .Values.aiGateway.containerPort }}
-
-          env:
-            - name: GATEWAY_ENVIRONMENT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: PLATFORM_ENVIRONMENT
-
-            - name: GATEWAY_POSTGRES_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: POSTGRES_URL
-
-            - name: GATEWAY_REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: REDIS_URL
-
-            - name: GATEWAY_CLICKHOUSE_HOST
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: CLICKHOUSE_HOST
-
-            - name: GATEWAY_CLICKHOUSE_PORT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: CLICKHOUSE_PORT
-
-            - name: GATEWAY_CLICKHOUSE_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: CLICKHOUSE_USER
-
-            - name: GATEWAY_CLICKHOUSE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: CLICKHOUSE_PASSWORD
-
-            - name: GATEWAY_CLICKHOUSE_DATABASE
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: CLICKHOUSE_DATABASE
-
-            - name: GATEWAY_FERNET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: GATEWAY_FERNET_KEY
-
-            # Keycloak
-            - name: KEYCLOAK_SERVER_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_SERVER_URL
-            - name: KEYCLOAK_REALM
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_REALM
-            - name: KEYCLOAK_AUDIENCE
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_AUDIENCE
-            - name: KEYCLOAK_ISSUER
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_ISSUER
-
-          resources:
-            requests:
-              cpu: {{ .Values.aiGateway.resources.requests.cpu }}
-              memory: {{ .Values.aiGateway.resources.requests.memory }}
-            limits:
-              cpu: {{ .Values.aiGateway.resources.limits.cpu }}
-              memory: {{ .Values.aiGateway.resources.limits.memory }}
-
-          startupProbe:
-            httpGet:
-              path: /healthz
-              port: {{ .Values.aiGateway.containerPort }}
-            failureThreshold: 30
-            periodSeconds: 10
-            timeoutSeconds: 3
-
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: {{ .Values.aiGateway.containerPort }}
-            periodSeconds: 10
-
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: {{ .Values.aiGateway.containerPort }}
-            periodSeconds: 15
-            failureThreshold: 5

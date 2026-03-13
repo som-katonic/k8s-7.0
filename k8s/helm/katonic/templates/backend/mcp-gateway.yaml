@@ -1,3 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.mcpGateway.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.mcpGateway.name }}
+spec:
+  replicas: {{ .Values.mcpGateway.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.mcpGateway.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.mcpGateway.name }}
+    spec:
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      containers:
+        - name: {{ .Values.mcpGateway.name }}
+          image: {{ .Values.imageRegistry }}{{ .Values.mcpGateway.image.repository }}:{{ .Values.mcpGateway.image.tag }}
+          imagePullPolicy: {{ .Values.mcpGateway.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.mcpGateway.containerPort }}
+          env:
+            - name: MCP_TIMEOUT
+              value: {{ .Values.mcpGateway.timeout | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.global.configMap }}
+            - secretRef:
+                name: {{ .Values.global.secret }}
+          resources:
+            {{- toYaml .Values.mcpGateway.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.mcpGateway.containerPort }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.mcpGateway.containerPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
 ---
 apiVersion: v1
 kind: Service
@@ -10,91 +60,8 @@ spec:
   selector:
     app: {{ .Values.mcpGateway.name }}
   ports:
-    - name: http-api
-      port: {{ .Values.mcpGateway.service.port }}
+    - port: {{ .Values.mcpGateway.service.port }}
       targetPort: {{ .Values.mcpGateway.service.targetPort }}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .Values.mcpGateway.name }}
-  namespace: {{ .Values.global.namespace }}
-spec:
-  replicas: {{ .Values.mcpGateway.replicas }}
-  selector:
-    matchLabels:
-      app: {{ .Values.mcpGateway.name }}
-  template:
-    metadata:
-      labels:
-        app: {{ .Values.mcpGateway.name }}
-    spec:
-      enableServiceLinks: false
-      imagePullSecrets:
-        - name: {{ .Values.global.imagePullSecret }}
-      containers:
-        - name: {{ .Values.mcpGateway.name }}
-          image: "{{ .Values.mcpGateway.image.repository }}:{{ .Values.mcpGateway.image.tag }}"
-          imagePullPolicy: {{ .Values.mcpGateway.image.pullPolicy }}
-          ports:
-            - containerPort: {{ .Values.mcpGateway.containerPort }}
-          env:
-            - name: PORT
-              value: "{{ .Values.mcpGateway.containerPort }}"
-            - name: MCP_TIMEOUT
-              value: "{{ .Values.mcpGateway.timeout }}"
-            - name: ADMIN_API_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: ADMIN_API_URL
-            - name: PLATFORM_ENVIRONMENT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: PLATFORM_ENVIRONMENT
-            - name: KEYCLOAK_SERVER_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_SERVER_URL
-            - name: KEYCLOAK_REALM
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_REALM
-            - name: KEYCLOAK_AUDIENCE
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_AUDIENCE
-            - name: KEYCLOAK_ISSUER
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_ISSUER
-          resources:
-            requests:
-              cpu: {{ .Values.mcpGateway.resources.requests.cpu }}
-              memory: {{ .Values.mcpGateway.resources.requests.memory }}
-            limits:
-              cpu: {{ .Values.mcpGateway.resources.limits.cpu }}
-              memory: {{ .Values.mcpGateway.resources.limits.memory }}
-          startupProbe:
-            httpGet:
-              path: /v1/health
-              port: {{ .Values.mcpGateway.containerPort }}
-            failureThreshold: 30
-            periodSeconds: 10
-            timeoutSeconds: 3
-          readinessProbe:
-            httpGet:
-              path: /v1/health
-              port: {{ .Values.mcpGateway.containerPort }}
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /v1/health
-              port: {{ .Values.mcpGateway.containerPort }}
-            periodSeconds: 15
-            failureThreshold: 5
+      protocol: TCP
+
+

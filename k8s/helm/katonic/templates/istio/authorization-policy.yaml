@@ -1,25 +1,10 @@
----
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: require-jwt
-  namespace: {{ .Values.namespace }}
-spec:
-  action: ALLOW
-  rules:
-    - to:
-        - operation:
-            paths: {{ toYaml .Values.jwtPublicPaths | nindent 14 }}
-    - from:
-        - source:
-            requestPrincipals: ["*"]
 {{- range .Values.allowAllApps }}
 ---
-apiVersion: security.istio.io/v1
+apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
 metadata:
   name: allow-{{ .name }}
-  namespace: {{ $.Values.namespace }}
+  namespace: {{ $.Values.global.namespace }}
 spec:
   selector:
     matchLabels:
@@ -28,3 +13,5 @@ spec:
   rules:
     - {}
 {{- end }}
+
+

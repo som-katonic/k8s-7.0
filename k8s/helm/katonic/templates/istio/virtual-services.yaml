@@ -1,34 +1,247 @@
-{{- range .Values.virtualServices }}
+{{- $domain := .Values.domain -}}
+{{- $gwNamespace := .Values.gateway.namespace -}}
+{{- $gwName := .Values.gateway.name -}}
 ---
-apiVersion: networking.istio.io/v1
+# ── External ingress: route root domain → frontend ────────────────────────────
+apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
 metadata:
-  name: {{ .name }}
-  namespace: {{ .namespace }}
+  name: katonic-ingress
+  namespace: {{ .Values.global.namespace }}
 spec:
-  {{- if .useGateway }}
+  hosts:
+    - {{ $domain | quote }}
   gateways:
-    - {{ $.Values.gateway.namespace }}/{{ $.Values.gateway.name }}
+    - {{ $gwNamespace }}/{{ $gwName }}
+  http:
+    # ── API routing — backend paths ──────────────────────────────────────────
+    - match:
+        - uri:
+            prefix: "/api/admin"
+      route:
+        - destination:
+            host: admin-api.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8000
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/agents"
+      route:
+        - destination:
+            host: agent-api.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8000
+      timeout: 120s
+
+    - match:
+        - uri:
+            prefix: "/api/ai"
+      route:
+        - destination:
+            host: ai-gateway.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8010
+      timeout: 300s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+
+    - match:
+        - uri:
+            prefix: "/api/eval"
+      route:
+        - destination:
+            host: eval-engine.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8015
+      timeout: 180s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+
+    - match:
+        - uri:
+            prefix: "/api/governance"
+      route:
+        - destination:
+            host: governance-proxy.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8000
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/guardrails"
+      route:
+        - destination:
+            host: guardrails-engine.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8000
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/knowledge"
+      route:
+        - destination:
+            host: knowledge-engine.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8011
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/mcp"
+      route:
+        - destination:
+            host: mcp-gateway.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8009
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/models"
+      route:
+        - destination:
+            host: model-deployment-service.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8012
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/observability"
+      route:
+        - destination:
+            host: observability.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8000
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/platform"
+      route:
+        - destination:
+            host: platform-backend.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 3002
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/connections"
+      route:
+        - destination:
+            host: remote-connections.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8014
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/workspaces"
+      route:
+        - destination:
+            host: workspace-service.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8013
+      timeout: 60s
+
+    - match:
+        - uri:
+            prefix: "/api/runtime"
+      route:
+        - destination:
+            host: agent-runtime.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8000
+      timeout: 300s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+
+    # ── Frontend catch-all ────────────────────────────────────────────────────
+    - match:
+        - uri:
+            prefix: "/"
+      route:
+        - destination:
+            host: katonic-frontend.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 3000
+      timeout: 60s
+
+---
+# ── Internal: ai-gateway (long timeout for LLM calls) ────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: ai-gateway-internal
+  namespace: {{ .Values.global.namespace }}
+spec:
   hosts:
-    - {{ $.Values.domain }}
-  {{- else }}
-  hosts:
-    - {{ .internalHost }}
-  {{- end }}
+    - ai-gateway.{{ .Values.global.namespace }}.svc.cluster.local
+  gateways:
+    - mesh
   http:
     - route:
-        {{- range .routes }}
         - destination:
-            host: {{ .host }}
+            host: ai-gateway.{{ .Values.global.namespace }}.svc.cluster.local
             port:
-              number: {{ .port }}
-        {{- end }}
-      {{- if .timeout }}
-      timeout: {{ .timeout }}
-      {{- end }}
-      {{- if .retries }}
+              number: 8010
+      timeout: 300s
       retries:
-        attempts: {{ .retries.attempts }}
-        retryOn: {{ .retries.retryOn }}
-      {{- end }}
-{{- end }}
+        attempts: 1
+        retryOn: connect-failure
+
+---
+# ── Internal: eval-engine ─────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: eval-engine-internal
+  namespace: {{ .Values.global.namespace }}
+spec:
+  hosts:
+    - eval-engine.{{ .Values.global.namespace }}.svc.cluster.local
+  gateways:
+    - mesh
+  http:
+    - route:
+        - destination:
+            host: eval-engine.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8015
+      timeout: 180s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+
+---
+# ── Internal: agent-runtime ───────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: agent-runtime-internal
+  namespace: {{ .Values.global.namespace }}
+spec:
+  hosts:
+    - agent-runtime.{{ .Values.global.namespace }}.svc.cluster.local
+  gateways:
+    - mesh
+  http:
+    - route:
+        - destination:
+            host: agent-runtime.{{ .Values.global.namespace }}.svc.cluster.local
+            port:
+              number: 8000
+      timeout: 300s
+      retries:
+        attempts: 1
+        retryOn: connect-failure
+
+

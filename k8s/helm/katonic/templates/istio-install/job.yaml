@@ -1,0 +1,81 @@
+---
+# Pre-install: ensure istio-system namespace exists before anything else
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-system
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "1"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: istio-installer-sa
+  namespace: istio-system
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "2"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: istio-installer-role
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "2"
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: istio-installer-binding
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "2"
+subjects:
+  - kind: ServiceAccount
+    name: istio-installer-sa
+    namespace: istio-system
+roleRef:
+  kind: ClusterRole
+  name: istio-installer-role
+  apiGroup: rbac.authorization.k8s.io
+---
+{{- if .Values.istio.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: istio-install-job
+  namespace: istio-system
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "3"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: istio-installer-sa
+      containers:
+        - name: istio-installer
+          image: {{ .Values.istio.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ISTIO_INSTALL
+              value: "true"
+            - name: ISTIO_IMAGE_REGISTRY
+              value: {{ .Values.istio.imageRegistry | quote }}
+            - name: ISTIO_PILOT_IMAGE
+              value: {{ .Values.istio.pilotImage | quote }}
+{{- end }}
+
+

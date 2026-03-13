@@ -1,23 +1,10 @@
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ .Values.frontend.name }}
-  namespace: {{ .Values.global.namespace }}
-spec:
-  selector:
-    app: {{ .Values.frontend.name }}
-  ports:
-    - name: http-web
-      port: {{ .Values.frontend.service.port }}
-      targetPort: {{ .Values.frontend.service.targetPort }}
-
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Values.frontend.name }}
   namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.frontend.name }}
 spec:
   replicas: {{ .Values.frontend.replicas }}
   selector:
@@ -28,39 +15,58 @@ spec:
       labels:
         app: {{ .Values.frontend.name }}
     spec:
-      enableServiceLinks: false
       imagePullSecrets:
         - name: {{ .Values.global.imagePullSecret }}
       containers:
         - name: {{ .Values.frontend.name }}
-          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          image: {{ .Values.imageRegistry }}{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.frontend.service.targetPort }}
+          env:
+            - name: NEXT_PUBLIC_PLATFORM_DOMAIN
+              value: {{ .Values.domain | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.global.configMap }}
+            - secretRef:
+                name: {{ .Values.global.secret }}
           resources:
-            requests:
-              cpu: {{ .Values.frontend.resources.requests.cpu }}
-              memory: {{ .Values.frontend.resources.requests.memory }}
-            limits:
-              cpu: {{ .Values.frontend.resources.limits.cpu }}
-              memory: {{ .Values.frontend.resources.limits.memory }}
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
           startupProbe:
             httpGet:
-              path: /healthz
+              path: /
               port: {{ .Values.frontend.service.targetPort }}
             failureThreshold: {{ .Values.frontend.startupProbe.failureThreshold }}
             periodSeconds: {{ .Values.frontend.startupProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.frontend.startupProbe.timeoutSeconds }}
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /
               port: {{ .Values.frontend.service.targetPort }}
             periodSeconds: {{ .Values.frontend.readinessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.frontend.readinessProbe.timeoutSeconds }}
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /
               port: {{ .Values.frontend.service.targetPort }}
             periodSeconds: {{ .Values.frontend.livenessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.frontend.livenessProbe.timeoutSeconds }}
             failureThreshold: {{ .Values.frontend.livenessProbe.failureThreshold }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.frontend.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.frontend.name }}
+spec:
+  selector:
+    app: {{ .Values.frontend.name }}
+  ports:
+    - port: {{ .Values.frontend.service.port }}
+      targetPort: {{ .Values.frontend.service.targetPort }}
+      protocol: TCP
+
+

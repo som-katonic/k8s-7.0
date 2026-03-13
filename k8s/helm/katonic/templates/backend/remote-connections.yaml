@@ -1,3 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.remoteConnections.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.remoteConnections.name }}
+spec:
+  replicas: {{ .Values.remoteConnections.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.remoteConnections.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.remoteConnections.name }}
+    spec:
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      containers:
+        - name: {{ .Values.remoteConnections.name }}
+          image: {{ .Values.imageRegistry }}{{ .Values.remoteConnections.image.repository }}:{{ .Values.remoteConnections.image.tag }}
+          imagePullPolicy: {{ .Values.remoteConnections.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.remoteConnections.service.targetPort }}
+          env:
+            - name: RC_DEBUG
+              value: {{ .Values.remoteConnections.env.debug | quote }}
+            - name: RC_JWT_ALGORITHM
+              value: {{ .Values.remoteConnections.env.jwtAlgorithm | quote }}
+            - name: RC_DEFAULT_TOOL_TIMEOUT
+              value: {{ .Values.remoteConnections.env.defaultToolTimeout | quote }}
+            - name: RC_SPEC_FETCH_TIMEOUT
+              value: {{ .Values.remoteConnections.env.specFetchTimeout | quote }}
+            - name: RC_HEALTH_CHECK_TIMEOUT
+              value: {{ .Values.remoteConnections.env.healthCheckTimeout | quote }}
+            - name: RC_MCP_SSE_TIMEOUT
+              value: {{ .Values.remoteConnections.env.mcpSseTimeout | quote }}
+            - name: RC_MCP_SSE_RECONNECT_DELAY
+              value: {{ .Values.remoteConnections.env.mcpSseReconnectDelay | quote }}
+            - name: RC_HEALTH_CHECK_INTERVAL
+              value: {{ .Values.remoteConnections.env.healthCheckInterval | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.global.configMap }}
+            - secretRef:
+                name: {{ .Values.global.secret }}
+          resources:
+            {{- toYaml .Values.remoteConnections.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.remoteConnections.service.targetPort }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.remoteConnections.service.targetPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
 ---
 apiVersion: v1
 kind: Service
@@ -10,122 +74,8 @@ spec:
   selector:
     app: {{ .Values.remoteConnections.name }}
   ports:
-    - name: http-api
-      port: {{ .Values.remoteConnections.service.port }}
+    - port: {{ .Values.remoteConnections.service.port }}
       targetPort: {{ .Values.remoteConnections.service.targetPort }}
+      protocol: TCP
 
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .Values.remoteConnections.name }}
-  namespace: {{ .Values.global.namespace }}
-spec:
-  replicas: {{ .Values.remoteConnections.replicas }}
-  selector:
-    matchLabels:
-      app: {{ .Values.remoteConnections.name }}
-  template:
-    metadata:
-      labels:
-        app: {{ .Values.remoteConnections.name }}
-    spec:
-      enableServiceLinks: false
-      imagePullSecrets:
-        - name: {{ .Values.global.imagePullSecret }}
-      containers:
-        - name: {{ .Values.remoteConnections.name }}
-          image: "{{ .Values.remoteConnections.image.repository }}:{{ .Values.remoteConnections.image.tag }}"
-          imagePullPolicy: {{ .Values.remoteConnections.image.pullPolicy }}
-          ports:
-            - containerPort: {{ .Values.remoteConnections.service.targetPort }}
 
-          env:
-            - name: RC_DEBUG
-              value: "{{ .Values.remoteConnections.env.debug }}"
-            - name: RC_PORT
-              value: "{{ .Values.remoteConnections.service.targetPort }}"
-            - name: RC_DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: POSTGRES_URL
-            - name: RC_ENCRYPTION_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: RC_ENCRYPTION_KEY
-            - name: RC_JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.global.secret }}
-                  key: JWT_SECRET
-            - name: RC_JWT_ALGORITHM
-              value: "{{ .Values.remoteConnections.env.jwtAlgorithm }}"
-            - name: RC_DEFAULT_TOOL_TIMEOUT
-              value: "{{ .Values.remoteConnections.env.defaultToolTimeout }}"
-            - name: RC_SPEC_FETCH_TIMEOUT
-              value: "{{ .Values.remoteConnections.env.specFetchTimeout }}"
-            - name: RC_HEALTH_CHECK_TIMEOUT
-              value: "{{ .Values.remoteConnections.env.healthCheckTimeout }}"
-            - name: RC_MCP_SSE_TIMEOUT
-              value: "{{ .Values.remoteConnections.env.mcpSseTimeout }}"
-            - name: RC_MCP_SSE_RECONNECT_DELAY
-              value: "{{ .Values.remoteConnections.env.mcpSseReconnectDelay }}"
-            - name: RC_HEALTH_CHECK_INTERVAL_SECONDS
-              value: "{{ .Values.remoteConnections.env.healthCheckInterval }}"
-            - name: PLATFORM_ENVIRONMENT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: PLATFORM_ENVIRONMENT
-            # -- Keycloak --
-            - name: KEYCLOAK_SERVER_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_SERVER_URL
-            - name: KEYCLOAK_REALM
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_REALM
-            - name: KEYCLOAK_AUDIENCE
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_AUDIENCE
-            - name: KEYCLOAK_ISSUER
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.configMap }}
-                  key: KEYCLOAK_ISSUER
-
-          resources:
-            requests:
-              cpu: {{ .Values.remoteConnections.resources.requests.cpu }}
-              memory: {{ .Values.remoteConnections.resources.requests.memory }}
-            limits:
-              cpu: {{ .Values.remoteConnections.resources.limits.cpu }}
-              memory: {{ .Values.remoteConnections.resources.limits.memory }}
-
-          startupProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.remoteConnections.service.targetPort }}
-            failureThreshold: 30
-            periodSeconds: 10
-            timeoutSeconds: 3
-
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.remoteConnections.service.targetPort }}
-            periodSeconds: 10
-
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.remoteConnections.service.targetPort }}
-            periodSeconds: 15
-            failureThreshold: 5

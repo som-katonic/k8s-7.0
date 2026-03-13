@@ -1,23 +1,14 @@
-{{- $fullName := "clickhouse" -}}
-{{- $namespace := .Values.infra.clickhouse.namespace -}}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ $fullName }}-init
-  namespace: {{ $namespace }}
-data:
-  init.sql: |
-{{ .Values.infra.clickhouse.initSQL | indent 4 }}
----
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ $fullName }}
-  namespace: {{ $namespace }}
+  name: clickhouse
+  namespace: {{ .Values.infra.clickhouse.namespace }}
+  labels:
+    app: clickhouse
 spec:
+  clusterIP: None
   selector:
-    app: {{ $fullName }}
+    app: clickhouse
   ports:
     - name: http
       port: {{ .Values.infra.clickhouse.service.ports.http }}
@@ -26,82 +17,86 @@ spec:
       port: {{ .Values.infra.clickhouse.service.ports.native }}
       targetPort: {{ .Values.infra.clickhouse.service.ports.native }}
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-init
+  namespace: {{ .Values.infra.clickhouse.namespace }}
+data:
+  init.sql: |
+    {{ .Values.infra.clickhouse.initSQL | nindent 4 }}
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ $fullName }}
-  namespace: {{ $namespace }}
+  name: clickhouse
+  namespace: {{ .Values.infra.clickhouse.namespace }}
+  labels:
+    app: clickhouse
 spec:
-  serviceName: {{ $fullName }}
+  serviceName: clickhouse
   replicas: {{ .Values.infra.clickhouse.statefulset.replicas }}
   selector:
     matchLabels:
-      app: {{ $fullName }}
+      app: clickhouse
   template:
     metadata:
       labels:
-        app: {{ $fullName }}
-      annotations:
+        app: clickhouse
         sidecar.istio.io/inject: "false"
     spec:
       containers:
         - name: clickhouse
-          image: "{{ .Values.infra.clickhouse.image.repository }}:{{ .Values.infra.clickhouse.image.tag }}"
+          image: {{ .Values.infra.clickhouse.image.repository }}:{{ .Values.infra.clickhouse.image.tag }}
           imagePullPolicy: {{ .Values.infra.clickhouse.image.pullPolicy }}
           ports:
-            - containerPort: {{ .Values.infra.clickhouse.service.ports.http }}
-            - containerPort: {{ .Values.infra.clickhouse.service.ports.native }}
+            - name: http
+              containerPort: {{ .Values.infra.clickhouse.service.ports.http }}
+            - name: native
+              containerPort: {{ .Values.infra.clickhouse.service.ports.native }}
           env:
             - name: CLICKHOUSE_DB
-              value: "{{ .Values.infra.clickhouse.clickhouse.db }}"
+              value: {{ .Values.infra.clickhouse.clickhouse.db | quote }}
             - name: CLICKHOUSE_USER
-              value: "{{ .Values.infra.clickhouse.clickhouse.user }}"
+              value: {{ .Values.infra.clickhouse.clickhouse.user | quote }}
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.infra.clickhouse.secrets.clickhouse }}
                   key: {{ .Values.infra.clickhouse.secrets.passwordKey }}
-            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
-              value: "1"
           volumeMounts:
-            - name: chdata
+            - name: clickhouse-data
               mountPath: /var/lib/clickhouse
-            - name: init-scripts
+            - name: clickhouse-init
               mountPath: /docker-entrypoint-initdb.d
           resources:
-            requests:
-              cpu: {{ .Values.infra.clickhouse.resources.requests.cpu }}
-              memory: {{ .Values.infra.clickhouse.resources.requests.memory }}
-            limits:
-              cpu: {{ .Values.infra.clickhouse.resources.limits.cpu }}
-              memory: {{ .Values.infra.clickhouse.resources.limits.memory }}
-          startupProbe:
-            exec:
-              command: ["clickhouse-client", "--query", "SELECT 1"]
-            failureThreshold: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
-          readinessProbe:
-            exec:
-              command: ["clickhouse-client", "--query", "SELECT 1"]
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 6
+            {{- toYaml .Values.infra.clickhouse.resources | nindent 12 }}
           livenessProbe:
-            exec:
-              command: ["clickhouse-client", "--query", "SELECT 1"]
-            periodSeconds: 15
+            httpGet:
+              path: /ping
+              port: {{ .Values.infra.clickhouse.service.ports.http }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
             timeoutSeconds: 5
-            failureThreshold: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: {{ .Values.infra.clickhouse.service.ports.http }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
       volumes:
-        - name: init-scripts
+        - name: clickhouse-init
           configMap:
-            name: {{ $fullName }}-init
+            name: clickhouse-init
   volumeClaimTemplates:
     - metadata:
-        name: chdata
+        name: clickhouse-data
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
             storage: {{ .Values.infra.clickhouse.storage.size }}
+
+
