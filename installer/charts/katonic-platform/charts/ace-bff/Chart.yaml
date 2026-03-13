@@ -1,5 +1,0 @@
-apiVersion: v2
-name: ace-bff
-description: ACE BFF - Chat backend-for-frontend with Socket.IO
-version: 7.0.0
-appVersion: "7.0.0"

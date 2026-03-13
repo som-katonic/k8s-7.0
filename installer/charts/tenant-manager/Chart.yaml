@@ -1,9 +1,0 @@
-apiVersion: v2
-name: tenant-manager
-description: Katonic AI Platform Tenant Manager - handles bootstrap, licensing, RBAC, and platform lifecycle
-type: application
-version: 7.0.0
-appVersion: "7.0.0"
-maintainers:
-  - name: Katonic AI
-    email: platform@katonic.ai

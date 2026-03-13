@@ -1,5 +1,0 @@
-apiVersion: v2
-name: model-deployment
-description: Model Deployment Service - GPU-aware model serving
-version: 7.0.0
-appVersion: "7.0.0"

@@ -1,5 +1,0 @@
-# Katonic Installer - Python dependencies
-# Used by entrypoint.sh for YAML parsing and pre-flight checks
-pyyaml>=6.0
-jinja2>=3.1
-requests>=2.31
